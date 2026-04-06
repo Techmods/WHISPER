@@ -43,13 +43,45 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 pip install ctranslate2>=4.6.3 faster-whisper RealtimeSTT sounddevice numpy pyautogui pyperclip
 ```
 
+## Modelle
+
+### Offizielle OpenAI-Modelle (mehrsprachig)
+
+| Modell | VRAM | Sprachen | Geschwindigkeit | Qualität |
+|---|---|---|---|---|
+| `tiny` | 75 MB | 99 Sprachen | extrem schnell | niedrig |
+| `base` | 150 MB | 99 Sprachen | sehr schnell | gering |
+| `small` | 500 MB | 99 Sprachen | schnell | mittel |
+| `medium` | 1.5 GB | 99 Sprachen | mittel | gut |
+| `large-v2` | 3 GB | 99 Sprachen | langsam | sehr gut |
+| `large-v3` | 3 GB | 99 Sprachen | langsam | beste Qualität |
+
+### Turbo-Modelle (schnell + mehrsprachig)
+
+| Modell | VRAM | Sprachen | Geschwindigkeit | Qualität |
+|---|---|---|---|---|
+| `deepdml/faster-whisper-large-v3-turbo-ct2` | 1.6 GB | 99 Sprachen | ~8x schneller als large-v3 | sehr gut |
+
+### Deutsch-finetuned
+
+| Modell | VRAM | Sprachen | Geschwindigkeit | Qualität |
+|---|---|---|---|---|
+| `Primeline/whisper-large-v3-turbo-german` | 1.6 GB | nur Deutsch | sehr schnell | sehr gut |
+| `primeline/whisper-large-v3-german` | 3 GB | nur Deutsch | langsam | exzellent |
+
+> **Empfehlung:** `deepdml/faster-whisper-large-v3-turbo-ct2` für den besten Kompromiss aus Geschwindigkeit und Qualität bei Deutsch. Deutsch-only-Modelle nur wenn ausschließlich Deutsch transkribiert wird.
+
+> **distil-large-v3 ist englisch-only** — nicht für Deutsch geeignet.
+
+Modell in `config.py` ändern — alle Optionen sind dort als Kommentar hinterlegt.
+
 ## Konfiguration
 
 Alle Parameter in `config.py` anpassen:
 
 | Parameter | Beschreibung | Standard |
 |---|---|---|
-| `MODEL_SIZE` | Whisper-Modell (`large-v3`, `distil-large-v3`, `medium`) | `large-v3` |
+| `MODEL_SIZE` | Whisper-Modell (siehe Tabelle oben) | `large-v3` |
 | `COMPUTE_TYPE` | **Für Blackwell zwingend** `float16` | `float16` |
 | `LANGUAGE` | Sprache (`de`, `en`, …) | `de` |
 | `BEAM_SIZE` | Dekodierungsqualität (1 = schnell, 5 = genau) | `2` |

@@ -9,10 +9,24 @@
 # MODELL-PARAMETER
 # ---------------------------------------------------------------------------
 
-# Whisper-Modellgröße: "tiny", "base", "small", "medium", "large-v2", "large-v3"
-# Für maximale Qualität: "large-v3"
-# Für niedrigere Latenz: "distil-large-v3" (falls installiert)
-MODEL_SIZE = "distil-large-v3"
+# Whisper-Modell — Deutsch-kompatible Optionen (eine Zeile einkommentieren):
+#
+# --- Offizielle OpenAI-Modelle (mehrsprachig, inkl. Deutsch) ---
+# MODEL_SIZE = "tiny"                                          # 75 MB   | alle Sprachen | sehr schnell, niedrige Qualität
+# MODEL_SIZE = "base"                                          # 150 MB  | alle Sprachen | schnell
+# MODEL_SIZE = "small"                                         # 500 MB  | alle Sprachen | gute Balance
+# MODEL_SIZE = "medium"                                        # 1.5 GB  | alle Sprachen | gut
+# MODEL_SIZE = "large-v2"                                      # 3 GB    | alle Sprachen | sehr gut
+# MODEL_SIZE = "large-v3"                                      # 3 GB    | alle Sprachen | beste Qualität (Standard)
+#
+# --- Turbo (schnell + mehrsprachig) ---
+# MODEL_SIZE = "deepdml/faster-whisper-large-v3-turbo-ct2"    # 1.6 GB  | alle Sprachen | ~8x schneller als large-v3, empfohlen
+#
+# --- Deutsch-finetuned ---
+# MODEL_SIZE = "Primeline/whisper-large-v3-turbo-german"      # 1.6 GB  | nur Deutsch   | optimiert für DE, sehr schnell
+# MODEL_SIZE = "primeline/whisper-large-v3-german"            # 3 GB    | nur Deutsch   | beste DE-Qualität
+#
+MODEL_SIZE = "large-v3"
 
 # Rechentyp: ZWINGEND "float16" für RTX 5080 (Blackwell sm_120)
 # INT8 ist für Blackwell (sm_120) in CTranslate2 >= 4.6.3 deaktiviert.
