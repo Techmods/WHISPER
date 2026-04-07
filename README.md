@@ -1,6 +1,6 @@
 # WHISPER — Live-Transkriptionssystem
 
-Echtzeit-Spracherkennung auf Deutsch mit [faster-whisper](https://github.com/SYSTRAN/faster-whisper) und GPU-Beschleunigung. Transkribierter Text wird direkt an die aktuelle Cursor-Position getippt und parallel in eine Datei geschrieben.
+Echtzeit-Spracherkennung auf Deutsch mit [faster-whisper](https://github.com/SYSTRAN/faster-whisper) und GPU-Beschleunigung. Transkribierter Text wird direkt an die aktuelle Cursor-Position getippt und parallel in eine Datei geschrieben. Alle Einstellungen sind über eine lokale Web-UI konfigurierbar.
 
 ## Hardware
 
@@ -18,6 +18,7 @@ Entwickelt und getestet auf:
 - Custom Vocabulary (Fachbegriffe via `initial_prompt`)
 - Keyword-Expansion: Abkürzungen werden automatisch ausgeschrieben
 - Regelbasierte Korrekturen (Regex)
+- **Web-UI** zur Konfiguration ohne Code-Änderungen (NiceGUI, Port 8080)
 
 ## Voraussetzungen
 
@@ -40,8 +41,55 @@ py -3.11 -m venv venv
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 # 4. Abhängigkeiten
-pip install ctranslate2>=4.6.3 faster-whisper RealtimeSTT sounddevice numpy pyautogui pyperclip
+pip install ctranslate2>=4.6.3 faster-whisper RealtimeSTT sounddevice numpy pyautogui pyperclip nicegui
 ```
+
+## Starten
+
+### Option A — Web-UI (empfohlen)
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python whisper_ui.py
+```
+
+Der Browser öffnet automatisch auf `http://localhost:8080`. Über die UI können alle Einstellungen angepasst, die Transkription gestartet/gestoppt und der Live-Output direkt im Browser verfolgt werden.
+
+Alternativ: `startui.bat` doppelklicken.
+
+### Option B — direkt im Terminal
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python transcription_system.py
+```
+
+Fokus auf das gewünschte Textfeld setzen — transkribierter Text wird dort automatisch eingefügt. **Beenden:** `Strg+C`
+
+Alternativ: `startwhisper.bat` doppelklicken.
+
+Beim ersten Start wird das Whisper-Modell heruntergeladen (je nach Modell 75 MB – 3 GB).
+
+## Web-UI
+
+Die Web-UI läuft lokal auf Port 8080 und ermöglicht die vollständige Konfiguration ohne Code-Änderungen.
+
+| Bereich | Funktion |
+|---|---|
+| Modell | Dropdown mit VRAM-Info für alle unterstützten Modelle |
+| Compute Type | float16 / bfloat16 / int8_float16 — mit Blackwell-Warnung |
+| Sprache | Deutsch, Englisch, weitere oder automatische Erkennung |
+| Beam Size | Slider 1–10 (Geschwindigkeit vs. Genauigkeit) |
+| Initial Prompt | Freitext für Kontext, Stil und Formatierungsvorgaben |
+| Audio-Eingabe | Dropdown mit allen verfügbaren Mikrofonen |
+| VAD | Voice Activity Detection toggle + Silero-Empfindlichkeit |
+| Custom Vocabulary | Fachbegriffe als Chips (hinzufügen/entfernen) |
+| Keyword-Expansionen | Tabelle: Abkürzung → Volltext |
+| Korrekturen | Tabelle: Von (Regex) → Nach |
+| Ausgabe | Cursor-Tippen toggle + Ausgabedatei mit Datei-Explorer-Dialog |
+| Steuerung | Start/Stop-Button, Live-Transkriptionslog |
+
+Konfigurationsänderungen werden per **Speichern**-Button in `config.py` geschrieben (alle Kommentare bleiben erhalten). Ein Neustart der Transkription ist danach erforderlich.
 
 ## Modelle
 
@@ -66,47 +114,39 @@ pip install ctranslate2>=4.6.3 faster-whisper RealtimeSTT sounddevice numpy pyau
 
 | Modell | VRAM | Sprachen | Geschwindigkeit | Qualität |
 |---|---|---|---|---|
+| `MR-Eder/faster-whisper-large-v3-turbo-german` | 1.6 GB | nur Deutsch | sehr schnell | sehr gut |
 | `Primeline/whisper-large-v3-turbo-german` | 1.6 GB | nur Deutsch | sehr schnell | sehr gut |
 | `primeline/whisper-large-v3-german` | 3 GB | nur Deutsch | langsam | exzellent |
 
-> **Empfehlung:** `deepdml/faster-whisper-large-v3-turbo-ct2` für den besten Kompromiss aus Geschwindigkeit und Qualität bei Deutsch. Deutsch-only-Modelle nur wenn ausschließlich Deutsch transkribiert wird.
+> **Empfehlung:** `deepdml/faster-whisper-large-v3-turbo-ct2` für den besten Kompromiss aus Geschwindigkeit und Qualität. Deutsch-only-Modelle nur wenn ausschließlich Deutsch transkribiert wird.
 
 > **distil-large-v3 ist englisch-only** — nicht für Deutsch geeignet.
 
-Modell in `config.py` ändern — alle Optionen sind dort als Kommentar hinterlegt.
+Alle Modelle sind in `config.py` als Kommentare hinterlegt und in der Web-UI als Dropdown auswählbar.
 
 ## Konfiguration
 
-Alle Parameter in `config.py` anpassen:
+Alle Parameter in `config.py` — entweder manuell oder über die Web-UI:
 
 | Parameter | Beschreibung | Standard |
 |---|---|---|
-| `MODEL_SIZE` | Whisper-Modell (siehe Tabelle oben) | `large-v3` |
-| `COMPUTE_TYPE` | **Für Blackwell zwingend** `float16` | `float16` |
-| `LANGUAGE` | Sprache (`de`, `en`, …) | `de` |
-| `BEAM_SIZE` | Dekodierungsqualität (1 = schnell, 5 = genau) | `2` |
+| `MODEL_SIZE` | Whisper-Modell (siehe Tabelle oben) | `deepdml/faster-whisper-large-v3-turbo-ct2` |
+| `COMPUTE_TYPE` | **Für Blackwell zwingend** `float16` oder `bfloat16` | `float16` |
+| `LANGUAGE` | Sprache (`de`, `en`, `auto`, …) | `de` |
+| `BEAM_SIZE` | Dekodierungsqualität (1 = schnell, 10 = genau) | `5` |
+| `INITIAL_PROMPT_EXTRA` | Zusätzlicher Kontext/Stil für Whisper | `""` |
+| `INPUT_DEVICE_INDEX` | Mikrofon-Index (`None` = System-Standard) | `None` |
+| `VAD_ENABLED` | Voice Activity Detection aktivieren | `True` |
+| `SILERO_SENSITIVITY` | VAD-Empfindlichkeit (0.0–1.0) | `0.4` |
 | `CUSTOM_VOCABULARY` | Fachbegriffe für bessere Erkennung | Liste |
 | `KEYWORD_EXPANSIONS` | Abkürzung → Volltext (Post-Processing) | Dict |
 | `CORRECTIONS` | Regex-Korrekturen für Erkennungsfehler | Dict |
 | `TYPE_INTO_CURSOR` | Text an Cursor-Position tippen | `True` |
 | `OUTPUT_FILE` | Pfad zur Ausgabedatei (`None` = deaktiviert) | `transkription.txt` |
 
-## Starten
-
-```powershell
-.\venv\Scripts\Activate.ps1
-python transcription_system.py
-```
-
-Beim ersten Start wird das Whisper-Modell heruntergeladen (~3 GB für `large-v3`). Danach startet das System sofort.
-
-Fokus auf das gewünschte Textfeld setzen — transkribierter Text wird dort automatisch eingefügt.
-
-**Beenden:** `Strg+C`
-
 ## Blackwell-Hinweis (RTX 5080)
 
-CTranslate2 ≥ 4.6.3 unterstützt Blackwell (sm_120), hat aber INT8 explizit deaktiviert. `compute_type="float16"` ist Pflicht — INT8 wirft einen Fehler.
+CTranslate2 ≥ 4.6.3 unterstützt Blackwell (sm_120), hat aber INT8 explizit deaktiviert. `compute_type` muss `float16` oder `bfloat16` sein — INT8 und int8_float16 werfen einen Fehler.
 
 ## GPU testen
 
