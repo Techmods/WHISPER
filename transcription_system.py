@@ -140,23 +140,12 @@ def process_text(raw_text: str) -> str:
 # =============================================================================
 
 def build_initial_prompt(vocabulary: list) -> str:
-    """
-    Erstellt den initial_prompt fuer Whisper aus der Custom-Vocabulary-Liste.
-
-    Der initial_prompt gibt Whisper Kontext-Hinweise fuer die Transkription.
-    Er sollte die wichtigsten Fachbegriffe als repraesentativen Satz enthalten.
-
-    Args:
-        vocabulary: Liste der Fachbegriffe aus CUSTOM_VOCABULARY.
-
-    Returns:
-        Kommaseparierter String der Fachbegriffe als Prompt-Text.
-    """
     if not vocabulary:
-        return ""
-    # Fachbegriffe als natuerllichen Satz formulieren verbessert die Erkennung
+        return "Dies ist eine saubere Transkription auf Deutsch, die korrekte Satzzeichen und Grammatik verwendet."
+    
+    # Wir betten die Fachbegriffe in einen vorbildlichen Satz ein:
     terms = ", ".join(vocabulary)
-    return f"Fachbegriffe: {terms}."
+    return f"In diesem Gespräch nutzen wir Fachbegriffe wie {terms}. Bitte achte auf korrekte Interpunktion, Kommasetzung und Großschreibung."
 
 
 def build_hotwords(vocabulary: list) -> str:

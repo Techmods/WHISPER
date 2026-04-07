@@ -26,7 +26,7 @@
 # MODEL_SIZE = "Primeline/whisper-large-v3-turbo-german"      # 1.6 GB  | nur Deutsch   | optimiert für DE, sehr schnell
 # MODEL_SIZE = "primeline/whisper-large-v3-german"            # 3 GB    | nur Deutsch   | beste DE-Qualität
 #
-MODEL_SIZE = "large-v3"
+MODEL_SIZE = "deepdml/faster-whisper-large-v3-turbo-ct2"
 
 # Rechentyp: ZWINGEND "float16" für RTX 5080 (Blackwell sm_120)
 # INT8 ist für Blackwell (sm_120) in CTranslate2 >= 4.6.3 deaktiviert.
@@ -43,7 +43,7 @@ GPU_DEVICE_INDEX = 0
 LANGUAGE = "de"
 
 # Beam-Größe für die Dekodierung (höher = genauer, aber langsamer)
-BEAM_SIZE = 1
+BEAM_SIZE = 5
 
 # ---------------------------------------------------------------------------
 # CUSTOM VOCABULARY
