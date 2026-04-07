@@ -30,6 +30,11 @@ MODEL_SIZE = "deepdml/faster-whisper-large-v3-turbo-ct2"
 
 # Rechentyp: ZWINGEND "float16" für RTX 5080 (Blackwell sm_120)
 # INT8 ist für Blackwell (sm_120) in CTranslate2 >= 4.6.3 deaktiviert.
+# Rechentyp-Optionen:
+#   "float16"       — Pflicht für Blackwell (RTX 5080, sm_120)
+#   "bfloat16"      — Alternative zu float16, ähnliche Geschwindigkeit
+#   "int8_float16"  — Weniger VRAM, fast identische Genauigkeit (nicht für Blackwell)
+#   "int8"          — NICHT für Blackwell (sm_120) — CTranslate2 >= 4.6.3 deaktiviert
 COMPUTE_TYPE = "float16"
 
 # Inferenzgerät: "cuda" für GPU, "cpu" als Fallback
@@ -125,8 +130,23 @@ CORRECTIONS = {
 }
 
 # ---------------------------------------------------------------------------
+# INITIAL PROMPT
+# ---------------------------------------------------------------------------
+# Gibt Whisper Kontext zur Formatierung, Interpunktion und Stil.
+# Fachbegriffe aus CUSTOM_VOCABULARY werden automatisch angehängt.
+# Leer lassen für automatischen Prompt aus CUSTOM_VOCABULARY.
+INITIAL_PROMPT_EXTRA = ""
+
+# ---------------------------------------------------------------------------
 # AUDIO-PARAMETER (RealtimeSTT)
 # ---------------------------------------------------------------------------
+
+# Mikrofon-Eingabegerät (None = System-Standard)
+# Index ermitteln: python -c "import sounddevice as sd; print(sd.query_devices())"
+INPUT_DEVICE_INDEX = None
+
+# VAD (Voice Activity Detection) via Silero aktivieren
+VAD_ENABLED = True
 
 # Stille-Schwelle nach der eine Aufnahme als abgeschlossen gilt (Sekunden)
 SILERO_SENSITIVITY = 0.4
