@@ -15,6 +15,7 @@ Entwickelt und getestet auf:
 - GPU-Beschleunigung (CUDA, float16 — Pflicht für Blackwell)
 - Text direkt an Cursor-Position tippen (via Zwischenablage)
 - Transkription in Datei speichern
+- **Batch-Verarbeitung** von Audio-/Videodateien über die Web-UI
 - Custom Vocabulary (Fachbegriffe via `initial_prompt`)
 - Keyword-Expansion: Abkürzungen werden automatisch ausgeschrieben
 - Regelbasierte Korrekturen (Regex)
@@ -55,7 +56,7 @@ python whisper_ui.py
 
 Der Browser öffnet automatisch auf `http://localhost:8080`. Über die UI können alle Einstellungen angepasst, die Transkription gestartet/gestoppt und der Live-Output direkt im Browser verfolgt werden.
 
-Alternativ: `startui.bat` doppelklicken.
+Alternativ: **`startui.bat` doppelklicken** — startet Python unsichtbar im Hintergrund, beendet automatisch laufende Instanzen und öffnet den Browser nach 3 Sekunden.
 
 ### Option B — direkt im Terminal
 
@@ -88,8 +89,15 @@ Die Web-UI läuft lokal auf Port 8080 und ermöglicht die vollständige Konfigur
 | Korrekturen | Tabelle: Von (Regex) → Nach |
 | Ausgabe | Cursor-Tippen toggle + Ausgabedatei mit Datei-Explorer-Dialog |
 | Steuerung | Start/Stop-Button, Live-Transkriptionslog |
+| **Dateiverarbeitung** | Audio-/Videodateien in Warteschlange legen und asynchron transkribieren |
 
 Konfigurationsänderungen werden per **Speichern**-Button in `config.py` geschrieben (alle Kommentare bleiben erhalten). Ein Neustart der Transkription ist danach erforderlich.
+
+## Batch-Verarbeitung
+
+Über den Tab **Dateiverarbeitung** in der Web-UI können Audio- und Videodateien asynchron transkribiert werden. Die Verarbeitung läuft über `batch_transcriber.py` als separaten Prozess — das Live-Mikrofon wird dabei nicht beeinflusst.
+
+Unterstützte Formate: alle von faster-whisper unterstützten Audio/Video-Container (mp3, wav, m4a, mp4, mkv, …).
 
 ## Modelle
 
