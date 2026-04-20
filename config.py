@@ -26,7 +26,7 @@
 # MODEL_SIZE = "Primeline/whisper-large-v3-turbo-german"      # 1.6 GB  | nur Deutsch   | optimiert für DE, sehr schnell
 # MODEL_SIZE = "primeline/whisper-large-v3-german"            # 3 GB    | nur Deutsch   | beste DE-Qualität
 #
-MODEL_SIZE = "deepdml/faster-whisper-large-v3-turbo-ct2"
+MODEL_SIZE = 'deepdml/faster-whisper-large-v3-turbo-ct2'
 
 # Rechentyp: ZWINGEND "float16" für RTX 5080 (Blackwell sm_120)
 # INT8 ist für Blackwell (sm_120) in CTranslate2 >= 4.6.3 deaktiviert.
@@ -35,17 +35,17 @@ MODEL_SIZE = "deepdml/faster-whisper-large-v3-turbo-ct2"
 #   "bfloat16"      — Alternative zu float16, ähnliche Geschwindigkeit
 #   "int8_float16"  — Weniger VRAM, fast identische Genauigkeit (nicht für Blackwell)
 #   "int8"          — NICHT für Blackwell (sm_120) — CTranslate2 >= 4.6.3 deaktiviert
-COMPUTE_TYPE = "float16"
+COMPUTE_TYPE = 'float16'
 
 # Inferenzgerät: "cuda" für GPU, "cpu" als Fallback
-DEVICE = "cuda"
+DEVICE = 'cuda'
 
 # GPU-Index (bei mehreren GPUs ggf. anpassen)
 GPU_DEVICE_INDEX = 0
 
 # Transkriptionssprache (ISO 639-1): "de" für Deutsch, "en" für Englisch
 # None = automatische Erkennung (langsamer)
-LANGUAGE = "de"
+LANGUAGE = 'de'
 
 # Beam-Größe für die Dekodierung (höher = genauer, aber langsamer)
 BEAM_SIZE = 5
@@ -63,19 +63,18 @@ BEAM_SIZE = 5
 # - Zu lange Listen (> 50 Begriffe) können die Genauigkeit verschlechtern
 # ---------------------------------------------------------------------------
 CUSTOM_VOCABULARY = [
-    # Beispiel-Einträge — an eigene Fachdomäne anpassen:
-    "Transkription",
-    "Echtzeit",
-    "Spracherkennung",
-    "Whisper",
-    "CTranslate2",
-    "CUDA",
-    "Blackwell",
-    "RTX 5080",
-    # Eigene Fachbegriffe hier eintragen:
-    # "MeinFachbegriff",
-    # "Firmenname GmbH",
-    # "Produktname XL3000",
+    'Transkription',
+    'Echtzeit',
+    'Spracherkennung',
+    'Whisper',
+    'CTranslate2',
+    'CUDA',
+    'Blackwell',
+    'RTX 5080',
+    'Obsidian',
+    'faster whisper',
+    'claude',
+    'claude code',
 ]
 
 # ---------------------------------------------------------------------------
@@ -95,14 +94,10 @@ CUSTOM_VOCABULARY = [
 # Teilersetzungen zu vermeiden.
 # ---------------------------------------------------------------------------
 KEYWORD_EXPANSIONS = {
-    # Beispiel-Expansionen — an eigene Fachdomäne anpassen:
-    "ki": "Künstliche Intelligenz (KI)",
-    "ml": "Machine Learning (ML)",
-    "nlp": "Natural Language Processing (NLP)",
-    "api": "API (Application Programming Interface)",
-    # Eigene Expansionen hier eintragen:
-    # "vp": "Vizepräsident",
-    # "gf": "Geschäftsführer",
+    'ki': 'Künstliche Intelligenz (KI)',
+    'ml': 'Machine Learning (ML)',
+    'nlp': 'Natural Language Processing (NLP)',
+    'api': 'API (Application Programming Interface)',
 }
 
 # ---------------------------------------------------------------------------
@@ -121,21 +116,21 @@ KEYWORD_EXPANSIONS = {
 # Matching ist standardmäßig case-insensitive (flags=re.IGNORECASE).
 # ---------------------------------------------------------------------------
 CORRECTIONS = {
-    # Beispiel-Korrekturen — an eigene Fehler anpassen:
-    r"\bWhisba\b": "Whisper",
-    r"\bBlackval\b": "Blackwell",
-    r"\bSi Transleyt\b": "CTranslate2",
-    # Eigene Korrekturen hier eintragen:
-    # r"\bFalschSchreibung\b": "KorrekteSchreibung",
+    '\\bWhisba\\b': 'Whisper',
+    '\\bBlackval\\b': 'Blackwell',
+    '\\bSi Transleyt\\b': 'CTranslate2',
 }
 
 # ---------------------------------------------------------------------------
-# INITIAL PROMPT
+# INITIAL PROMPT & STILE
 # ---------------------------------------------------------------------------
+# Stil-Vorgabe (z.B. "standard", "code", "raw")
+TRANSCRIPTION_STYLE_PRESET = 'standard'
+
 # Gibt Whisper Kontext zur Formatierung, Interpunktion und Stil.
 # Fachbegriffe aus CUSTOM_VOCABULARY werden automatisch angehängt.
 # Leer lassen für automatischen Prompt aus CUSTOM_VOCABULARY.
-INITIAL_PROMPT_EXTRA = ""
+INITIAL_PROMPT_EXTRA = 'Dies ist eine technische Diskussion in deutscher Sprache. Bitte achte auf korrekte Groß- und Kleinschreibung, Satzzeichen (Punkte, Kommas, Fragezeichen) und setze nach jedem vollständigen Gedanken einen Absatz.'
 
 # ---------------------------------------------------------------------------
 # AUDIO-PARAMETER (RealtimeSTT)
@@ -148,6 +143,9 @@ INPUT_DEVICE_INDEX = None
 # VAD (Voice Activity Detection) via Silero aktivieren
 VAD_ENABLED = True
 
+# Zeit nach Sprach-Ende, bevor der Satz abgeschnitten wird ("Denkpausen-Dauer" in Sek)
+POST_SPEECH_SILENCE_DURATION = 4
+
 # Stille-Schwelle nach der eine Aufnahme als abgeschlossen gilt (Sekunden)
 SILERO_SENSITIVITY = 0.4
 
@@ -155,7 +153,7 @@ SILERO_SENSITIVITY = 0.4
 MIN_LENGTH_OF_RECORDING = 0.5
 
 # Pre-Recording-Puffer: wie viel Audio vor Sprachbeginn erhalten bleibt (Sekunden)
-PRE_RECORDING_BUFFER_DURATION = 0.2
+PRE_RECORDING_BUFFER_DURATION = 0.5
 
 # Wake-Word-Erkennung deaktivieren (keine Aktivierungsvokabel benötigt)
 WAKE_WORDS_SENSITIVITY = 0.0
@@ -180,4 +178,4 @@ TYPE_INTO_CURSOR = True
 
 # Transkriptionen in Datei schreiben (append). None = deaktiviert.
 # Beispiel: OUTPUT_FILE = r"C:\DEV\WHISPER\transkription.txt"
-OUTPUT_FILE = r"C:\DEV\WHISPER\transkription.txt"
+OUTPUT_FILE = 'C:\\DEV\\WHISPER\\transkription.txt'

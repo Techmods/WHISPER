@@ -1,557 +1,480 @@
 # =============================================================================
 # whisper_ui.py — NiceGUI Web-Konfigurationsoberfläche für Whisper
-#
-# Dark Mode, Card-basiert (slate-900 / slate-800 / sky-400 Akzent)
-# Läuft auf http://localhost:8080
-#
-# Starten: python whisper_ui.py
+# UI/UX Shadcn Edition V4 (Absolute Separation)
 # =============================================================================
 
 import asyncio
-import tkinter as tk
-import tkinter.filedialog as fd
+import os
+from pathlib import Path
 from nicegui import ui, app
 import sounddevice as sd
 import config_rw
 import process_manager
 
-# ---------------------------------------------------------------------------
-# Modell-Optionen
-# ---------------------------------------------------------------------------
+PROJECT_DIR = Path(__file__).parent
+VENV_PYTHON = PROJECT_DIR / "venv" / "Scripts" / "python.exe"
+BATCH_SCRIPT = PROJECT_DIR / "batch_transcriber.py"
+
 MODEL_OPTIONS = {
-    "tiny":                                         "tiny — 75 MB, sehr schnell",
-    "base":                                         "base — 150 MB, schnell",
-    "small":                                        "small — 500 MB, gute Balance",
-    "medium":                                       "medium — 1.5 GB, gut",
-    "large-v2":                                     "large-v2 — 3 GB, sehr gut",
-    "large-v3":                                     "large-v3 — 3 GB, beste Qualität",
-    "deepdml/faster-whisper-large-v3-turbo-ct2":    "large-v3-turbo — 1.6 GB, 8× schneller (empfohlen)",
-    "Primeline/whisper-large-v3-turbo-german":      "large-v3-turbo-DE — 1.6 GB, nur Deutsch",
-    "primeline/whisper-large-v3-german":            "large-v3-german — 3 GB, beste DE-Qualität",
-    "MR-Eder/faster-whisper-large-v3-turbo-german": "MR-Eder turbo-DE — Deutsch-finetuned",
+    "large-v3": "large-v3 (~3 GB)",
+    "deepdml/faster-whisper-large-v3-turbo-ct2": "large-v3-turbo (~1.6 GB) [Empfohlen]",
+    "Primeline/whisper-large-v3-turbo-german": "large-v3-turbo-DE (~1.6 GB)",
+    "primeline/whisper-large-v3-german": "large-v3-german (~3 GB)",
+    "MR-Eder/faster-whisper-large-v3-turbo-german": "MR-Eder turbo-DE",
 }
 
-COMPUTE_OPTIONS = {
-    "float16":      "float16 — empfohlen (Blackwell/RTX 5080)",
-    "bfloat16":     "bfloat16 — Alternative zu float16",
-    "int8_float16": "int8_float16 — weniger VRAM (nicht für Blackwell)",
-    "int8":         "int8 — NICHT für Blackwell (sm_120)",
-}
-
-LANGUAGE_OPTIONS = {
-    "de":   "Deutsch",
-    "en":   "Englisch",
-    "fr":   "Französisch",
-    "es":   "Spanisch",
-    "it":   "Italienisch",
-    "auto": "Automatisch erkennen",
-}
-
+COMPUTE_OPTIONS = {"float16": "float16", "bfloat16": "bfloat16"}
+DEVICE_OPTIONS = {"cuda": "GPU (CUDA)", "cpu": "CPU"}
+LANGUAGE_OPTIONS = {"de": "Deutsch", "en": "Englisch", "auto": "Automatisch"}
+STYLE_OPTIONS = {"standard": "Standard (Sauber, Interpunktion)", "code": "Technical / Code", "raw": "Roh (ohne Satzzeichen)"}
 
 def get_audio_devices() -> dict:
-    """Gibt verfügbare Eingabegeräte als {index_str: name} zurück."""
     devices = {"none": "System-Standard"}
     try:
         for i, dev in enumerate(sd.query_devices()):
             if dev["max_input_channels"] > 0:
                 devices[str(i)] = f"{i}: {dev['name']}"
-    except Exception:
-        pass
+    except Exception: pass
     return devices
 
+def config_item(title: str, build_widget):
+    with ui.column().classes("w-full gap-1 p-3 bg-zinc-900/70 border border-zinc-800/60 rounded-md justify-start"):
+        ui.label(title).classes("text-zinc-500 text-[10px] font-bold uppercase tracking-wider")
+        with ui.element("div").classes("w-full"): build_widget()
 
-# ---------------------------------------------------------------------------
-# Hilfsfunktion: Konfig-Card mit Icon
-# ---------------------------------------------------------------------------
-def config_card(icon: str, title: str, subtitle: str, description: str, build_widget):
-    """Rendert eine Einstellungs-Karte im TailwindCSS-Album-Stil."""
-    with ui.card().classes(
-        "w-full bg-slate-800 rounded-2xl shadow-xl p-0 overflow-hidden"
-    ):
-        with ui.row().classes(
-            "flex-col md:flex-row items-center md:items-start gap-4 p-5"
-        ):
-            with ui.element("div").classes(
-                "flex items-center justify-center w-16 h-16 min-w-[4rem] "
-                "bg-slate-700 rounded-xl shadow-inner"
-            ):
-                ui.icon(icon).classes("text-sky-400 text-4xl")
-
-            with ui.column().classes("gap-1 flex-1 w-full"):
-                ui.label(title).classes("text-white text-lg font-medium leading-tight")
-                ui.label(subtitle).classes("text-sky-400 text-sm font-medium")
-                ui.label(description).classes("text-slate-400 text-xs mb-2")
-                build_widget()
-
-
-# ---------------------------------------------------------------------------
-# Haupt-UI
-# ---------------------------------------------------------------------------
 @ui.page("/")
 async def index():
     cfg = config_rw.read_config()
     audio_devices = get_audio_devices()
-
-    # In-Memory State
     vocab_list: list = list(cfg.get("CUSTOM_VOCABULARY", []))
-    expansions: list = [
-        {"key": k, "val": v}
-        for k, v in cfg.get("KEYWORD_EXPANSIONS", {}).items()
-    ]
-    corrections: list = [
-        {"von": k, "nach": v}
-        for k, v in cfg.get("CORRECTIONS", {}).items()
-    ]
-
-    # Widget-Referenzen
     refs = {}
 
-    # -----------------------------------------------------------------------
-    # Globales Styling
-    # -----------------------------------------------------------------------
     ui.add_head_html("""
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-      body, .nicegui-content { background-color: #0f172a !important; }
-      ::-webkit-scrollbar { width: 6px; }
-      ::-webkit-scrollbar-track { background: #1e293b; }
-      ::-webkit-scrollbar-thumb { background: #38bdf8; border-radius: 3px; }
+      body, .nicegui-content { background-color: #050505 !important; color: #fff; font-family: 'Inter', sans-serif; margin: 0; padding: 0 !important; max-width: 100vw; height: 100vh; overflow: hidden; }
+      ::-webkit-scrollbar { width: 5px; height: 5px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+
+      /* === EMERALD COLOR SYSTEM — Kill all Quasar blue === */
+      .q-btn--standard.bg-primary, .q-btn[class*="bg-primary"] { background: #059669 !important; }
+      .q-field__control:before { border-color: #3f3f46 !important; }
+      .q-field--focused .q-field__control:before, .q-field--focused .q-field__control:after { border-color: #10b981 !important; }
+      .q-toggle__inner--truthy .q-toggle__thumb:after { background: #10b981 !important; }
+      .q-toggle__inner--truthy .q-toggle__track { background: #10b981 !important; opacity: 0.5; }
+      .q-slider__thumb { color: #10b981 !important; }
+      .q-slider__track--inactive { background: #3f3f46 !important; }
+      .q-slider__track--active { background: #10b981 !important; }
+      .q-uploader { border: 1px dashed #3f3f46 !important; background: #0a0a0a !important; }
+      .q-uploader__header { background: #10b981 !important; }
+      .q-uploader__subtitle { opacity: 0.6; }
+      /* Remove default blue from select/btn */
+      .q-btn.text-primary { color: #10b981 !important; }
+      .q-item__section--avatar .q-icon { color: #10b981 !important; }
+      /* Global kill of Quasar primary blue on ALL buttons */
+      .q-btn { --q-primary: #10b981 !important; }
+      .q-btn:not(.bg-rose-900):not(.bg-zinc-100) .q-focus-helper { background: #10b981 !important; }
+      /* Glow / focus ring kill */
+      * { outline-color: #10b981 !important; }
+      .q-field--focused .q-field__label { color: #10b981 !important; }
+      /* Uploader add button */
+      .q-uploader__add { color: #10b981 !important; }
+      .q-uploader__header .q-btn { background: transparent !important; }
+
+      /* === TABS === */
+      .q-tabs { background: #080808; border-bottom: 1px solid #1a1a1a; min-height: 52px; }
+      .q-tab { padding: 0 28px !important; text-transform: none !important; font-weight: 500; font-size: 0.875rem; letter-spacing: 0.3px; opacity: 0.55; transition: all 0.15s; }
+      .q-tab:hover { opacity: 0.85; }
+      .q-tab--active { background: #0f1a14 !important; color: #10b981 !important; opacity: 1; border-bottom: 2px solid #10b981; }
+      .q-tab__indicator { display: none !important; }
+      .q-field__control { border-radius: 5px !important; }
+      .q-select__dropdown-icon { color: #52525b !important; }
+
+      /* === BUTTON DESIGN SYSTEM (single source of truth) === */
+      /* All interactive buttons follow: h-8, px-3, text-[11px], font-semibold, rounded-md */
+      .btn-em  { height:32px; padding:0 12px; font-size:11px; font-weight:600; letter-spacing:.3px;
+                 border-radius:5px; border:1px solid #10b981; color:#10b981;
+                 background:transparent; transition:all .15s; cursor:pointer; white-space:nowrap; }
+      .btn-em:hover { background:#10b98120; }
+      .btn-ghost { height:32px; padding:0 12px; font-size:11px; font-weight:600;
+                  border-radius:5px; border:1px solid #3f3f46; color:#71717a;
+                  background:transparent; transition:all .15s; cursor:pointer; white-space:nowrap; }
+      .btn-ghost:hover { border-color:#10b981; color:#10b981; }
+
+      /* Canvas centering fix */
+      #audio-canvas { display:block; margin:0 auto; }
+
+      /* === PRIMARY CTA — immune to Quasar dark-mode primary === */
+      .btn-cta { height:36px; padding:0 20px; font-size:13px; font-weight:700;
+                 border-radius:6px; background:#f4f4f5 !important; color:#09090b !important;
+                 border:none; transition:all .15s; cursor:pointer; white-space:nowrap; letter-spacing:.2px; }
+      .btn-cta:hover { background:#d1fae5 !important; color:#064e3b !important; }
+      .btn-cta-stop { background:#1c0a0a !important; color:#fca5a5 !important; border:1px solid #7f1d1d !important; }
+      .btn-cta-stop:hover { background:#450a0a !important; }
     </style>
+    <script>
+    let audioCtx; let analyser; let dataArray; let canvasCtx; let animId; let isVisActive = false;
+    async function initAudioVisualizer() {
+        if(isVisActive) return;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioCtx.createAnalyser(); analyser.fftSize = 128; analyser.smoothingTimeConstant = 0.8;
+            const source = audioCtx.createMediaStreamSource(stream); source.connect(analyser);
+            const canvas = document.getElementById('audio-canvas');
+            if(canvas) { canvasCtx = canvas.getContext('2d'); dataArray = new Uint8Array(analyser.frequencyBinCount); isVisActive=true; drawWave(); }
+        } catch(err) { console.warn('Mic access visualization denied by user.'); }
+    }
+    function drawWave() {
+        if(!isVisActive) return;
+        animId = requestAnimationFrame(drawWave);
+        const canvas = document.getElementById('audio-canvas');
+        if(!canvas || !canvasCtx) return;
+        analyser.getByteFrequencyData(dataArray);
+        canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+        canvasCtx.fillStyle = '#10b981';
+        
+        const numBars = 32;
+        const gap = 2; 
+        const barWidth = (canvas.width - gap * numBars) / numBars;
+        const activeRange = Math.floor(dataArray.length * 0.6); 
+        
+        let x = 0;
+        for(let i = 0; i < numBars; i++) {
+            const binIdx = Math.floor(i * (activeRange / numBars));
+            const barHeight = dataArray[binIdx] / 4;
+            const y = (canvas.height - barHeight) / 2;
+            canvasCtx.fillRect(x, y, barWidth, barHeight || 2);
+            x += barWidth + gap;
+        }
+    }
+    async function fallbackCopyTextToClipboard(text) {
+        var textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.top = "0"; textArea.style.left = "0"; textArea.style.position = "fixed";
+        document.body.appendChild(textArea);
+        textArea.focus(); textArea.select();
+        try { document.execCommand('copy'); } catch (err) { }
+        document.body.removeChild(textArea);
+    }
+    function copyToClipboard(text) {
+        if (!navigator.clipboard) { fallbackCopyTextToClipboard(text); return; }
+        navigator.clipboard.writeText(text);
+    }
+    </script>
     """)
 
-    # -----------------------------------------------------------------------
-    # Collect + Save (zentral, wird von Header-Button und manuell aufgerufen)
-    # -----------------------------------------------------------------------
     def save_config():
         device_val = refs.get("input_device", {}).get("sel")
         device_index = None
         if device_val and device_val.value and device_val.value != "none":
-            try:
-                device_index = int(device_val.value)
-            except ValueError:
-                device_index = None
+            try: device_index = int(device_val.value)
+            except ValueError: pass
 
         updates = {
-            "MODEL_SIZE":                refs["model"]["sel"].value,
-            "COMPUTE_TYPE":              refs["compute"]["sel"].value,
-            "LANGUAGE":                  refs["lang"]["sel"].value,
-            "BEAM_SIZE":                 int(refs["beam"]["slider"].value),
-            "INITIAL_PROMPT_EXTRA":      refs["prompt"]["area"].value,
-            "CUSTOM_VOCABULARY":         list(vocab_list),
-            "KEYWORD_EXPANSIONS":        {r["key"]: r["val"] for r in expansions},
-            "CORRECTIONS":               {r["von"]: r["nach"] for r in corrections},
-            "INPUT_DEVICE_INDEX":        device_index,
-            "VAD_ENABLED":               refs["vad"]["toggle"].value,
-            "SILERO_SENSITIVITY":        round(refs["silero"]["slider"].value, 2),
-            "TYPE_INTO_CURSOR":          refs["cursor"]["toggle"].value,
-            "OUTPUT_FILE":               refs["outfile"]["input"].value or None,
+            "MODEL_SIZE": refs["model"]["sel"].value,
+            "COMPUTE_TYPE": refs["compute"]["sel"].value,
+            "DEVICE": refs["device"]["sel"].value,
+            "GPU_DEVICE_INDEX": int(refs["gpu_idx"]["input"].value),
+            "LANGUAGE": refs["lang"]["sel"].value,
+            "BEAM_SIZE": int(refs["beam"]["sel"].value),
+            "INITIAL_PROMPT_EXTRA": refs["prompt"]["area"].value,
+            "TRANSCRIPTION_STYLE_PRESET": refs["style"]["sel"].value,
+            "CUSTOM_VOCABULARY": [kw.strip() for kw in refs["vocab"]["area"].value.split(",") if kw.strip()],
+            "INPUT_DEVICE_INDEX": device_index,
+            "VAD_ENABLED": refs["vad"]["toggle"].value,
+            "SILERO_SENSITIVITY": round(refs["silero"]["slider"].value, 2),
+            "MIN_LENGTH_OF_RECORDING": round(refs["min_len"]["slider"].value, 1),
+            "PRE_RECORDING_BUFFER_DURATION": round(refs["pre_buf"]["slider"].value, 1),
+            "POST_SPEECH_SILENCE_DURATION": round(refs["post_silence"]["slider"].value, 1),
+            "TYPE_INTO_CURSOR": refs["cursor"]["toggle"].value,
         }
         try:
             config_rw.write_config(updates)
-            ui.notify("Konfiguration gespeichert.", type="positive")
-            if process_manager.is_running():
-                ui.notify("Neustart erforderlich damit Änderungen wirksam werden.", type="warning")
+            ui.notify("Einstellungen gespeichert.", type="positive", color="emerald-600")
+            refs["restart_btn"].classes(remove="text-zinc-600", add="text-amber-500 hover:text-amber-400 bg-amber-900/20")
         except Exception as e:
-            ui.notify(f"Fehler beim Speichern: {e}", type="negative")
+            ui.notify(f"Fehler: {e}", type="negative", color="red-600")
 
-    # -----------------------------------------------------------------------
-    # Header
-    # -----------------------------------------------------------------------
-    with ui.row().classes(
-        "w-full items-center justify-between px-6 py-4 "
-        "bg-slate-800 rounded-2xl shadow-xl mb-6"
-    ):
-        with ui.row().classes("items-center gap-3"):
-            ui.icon("mic").classes("text-sky-400 text-3xl")
-            ui.label("Whisper UI").classes("text-white text-2xl font-medium")
+    async def trigger_restart():
+        ui.notify("Startet Transcriber Prozessbaum neu...", type="info", color="sky-600")
+        was_running = process_manager.is_running()
+        if was_running: await process_manager.stop_transcription()
+        await asyncio.sleep(0.5)
+        if was_running: await process_manager.start_transcription()
+        refs["restart_btn"].classes(remove="text-amber-500 hover:text-amber-400 bg-amber-900/20", add="text-zinc-600 hover:text-zinc-300")
+        update_status()
 
-        with ui.row().classes("items-center gap-4"):
-            # Status — Punkt direkt vor Text
-            status_dot = ui.icon("circle").classes("text-red-500 text-sm")
-            status_label = ui.label("Gestoppt").classes("text-slate-400 text-sm")
+    # --- MAIN LAYOUT (Single Column) ---
+    with ui.column().classes("w-full h-full p-0 flex flex-col"):
+        
+        # 1. HEADER (Extremely Thin & Minimal)
+        with ui.row().classes("w-full h-10 items-center justify-between px-6 bg-[#050505] shrink-0 border-b border-zinc-900"):
+            with ui.row().classes("items-center gap-2"):
+                ui.element("div").classes("w-2 h-2 rounded-full bg-zinc-100")
+                ui.label("Whisper AI").classes("text-zinc-300 text-xs font-bold tracking-tight uppercase")
+            with ui.row().classes("items-center gap-3"):
+                restart_btn = ui.button(icon="refresh", on_click=trigger_restart).classes("btn-ghost shadow-none").props("flat dense")
+                refs["restart_btn"] = restart_btn
+                ui.button("Speichern", on_click=save_config, icon="save").classes("btn-em shadow-none").props("flat")
 
-            ui.button("Speichern", icon="save", on_click=save_config).classes(
-                "bg-sky-500 hover:bg-sky-400 text-white text-sm rounded-xl px-4"
-            ).props("flat dense")
+        # 2. THE GLOBAL TOP TABS
+        with ui.tabs().classes("w-full") as global_tabs:
+            tab_live = ui.tab('Live-Transkription', icon='mic')
+            tab_batch = ui.tab('Dateiverarbeitung', icon='folder')
+            tab_sys = ui.tab('Systemkonfiguration', icon='settings')
+
+        # 3. TAB PANELS (Full Size)
+        with ui.tab_panels(global_tabs, value=tab_live).classes("w-full flex-1 bg-[#050505] p-0"):
+            
+            # ======== TAB 1: LIVE TRANSCRIPTION ========
+            with ui.tab_panel(tab_live).classes("w-full h-full p-0 flex flex-col items-center"):
+                with ui.column().classes("w-full max-w-7xl h-full flex flex-col"):
+                    
+                    # Live Header: Truly centered visualizer with absolute controls
+                    with ui.row().classes("w-full py-4 px-6 items-center justify-center shrink-0 border-b border-zinc-900/70 relative"):
+                        with ui.row().classes("absolute left-6 items-center gap-3"):
+                            async def toggle():
+                                if process_manager.is_running(): await process_manager.stop_transcription()
+                                else: 
+                                    await process_manager.start_transcription()
+                                    ui.run_javascript("initAudioVisualizer();")
+                                update_status()
+
+                            main_btn = ui.button("Mikrofon aktivieren", icon="mic", on_click=toggle).classes("btn-cta shadow-none")
+                            refs["main_btn"] = main_btn
+                            
+                            status_dot = ui.element("div").classes("w-2 h-2 rounded-full bg-zinc-600")
+                            status_label = ui.label("Offline").classes("text-zinc-500 text-xs font-semibold uppercase tracking-widest")
+
+                        # The centered piece
+                        with ui.element("div").classes("h-10 w-64 bg-zinc-950/80 rounded border border-zinc-800/60 flex items-center justify-center overflow-hidden"):
+                            ui.html('<canvas id="audio-canvas" width="240" height="28"></canvas>')
+
+                    # Live Middle: Card Feed
+                    card_texts = []
+                    with ui.row().classes("w-full px-6 pt-4 pb-2 justify-between items-center shrink-0"):
+                        ui.label("Diktierter Feed").classes("text-zinc-600 font-semibold tracking-widest text-[10px] uppercase")
+                        def copy_all():
+                            all_txt = "\n".join(card_texts)
+                            if all_txt:
+                                ui.run_javascript(f"copyToClipboard({repr(all_txt)});")
+                                ui.notify("Feed kopiert!", type="positive", color="emerald-600", position="bottom-right")
+                        ui.button("Alles kopieren", icon="content_copy", on_click=copy_all).classes("btn-em shadow-none").props("flat")
+
+                    feed_container = ui.scroll_area().classes("w-full flex-1 px-6 mb-2")
+                    def create_card(text):
+                        if not text.strip(): return
+                        card_texts.append(text)
+                        with feed_container:
+                            with ui.row().classes("w-full border border-zinc-800/70 bg-zinc-900/40 rounded-md p-4 mb-2 items-start justify-between hover:border-zinc-700 transition-colors"):
+                                ui.label(text).classes("text-zinc-200 text-sm flex-1 leading-relaxed")
+                                ui.button("Kopieren", icon="content_copy", on_click=lambda t=text: ui.run_javascript(f"copyToClipboard({repr(t)});")).classes("btn-em shadow-none ml-4 flex-shrink-0").props("flat")
+
+                    # Live Bottom: Tall Terminal
+                    with ui.column().classes("w-full h-64 border-t border-zinc-900 bg-zinc-950 p-4 shrink-0 rounded-t-xl mx-4"):
+                        ui.label("SYSTEM-LOG").classes("text-zinc-600 text-[10px] font-bold tracking-wider mb-2")
+                        log_area = ui.log(max_lines=300).classes("w-full flex-1 bg-transparent text-zinc-500 font-mono text-xs p-0 border-none leading-relaxed")
+                        def process_log(line):
+                            if line.startswith("__TRANSCRIPT__:"):
+                                create_card(line.replace("__TRANSCRIPT__:", "").strip())
+                            else: 
+                                log_area.push(line)
+                        for line in process_manager.get_log_buffer(): process_log(line)
+                        process_manager.on_new_line(process_log)
+
+
+            # ======== TAB 2: DATEIVERARBEITUNG ========
+            with ui.tab_panel(tab_batch).classes("w-full h-full overflow-y-auto"):
+                with ui.column().classes("w-full max-w-3xl mx-auto px-6 py-6 gap-4"):
+                    ui.label("Batch-Verarbeitung").classes("text-lg font-semibold tracking-tight text-zinc-100")
+                    ui.label("Audio- und Videodateien in die Warteschlange legen und asynchron transkribieren.").classes("text-zinc-500 text-xs mb-4")
+
+                    batch_files = []
+                    b_list = ui.column().classes("w-full gap-1")
+
+                    def update_flist():
+                        b_list.clear()
+                        for f in batch_files:
+                            with b_list:
+                                with ui.row().classes("w-full items-center justify-between border border-zinc-800/60 bg-zinc-900/40 rounded-md px-3 py-2"):
+                                    ui.label(os.path.basename(f)).classes("text-xs font-medium text-zinc-300 truncate flex-1")
+                                    ui.button(icon="close", on_click=lambda path=f: (batch_files.remove(path), update_flist())).classes("btn-ghost shadow-none w-6 h-6 p-0").props("flat dense")
+
+                    async def handle_upload(e):
+                        try:
+                            upload_dir = PROJECT_DIR / "99_archive" / "uploads"
+                            upload_dir.mkdir(parents=True, exist_ok=True)
+                            fname = e.file.name
+                            out_path = upload_dir / fname
+                            await e.file.save(out_path)
+                            safe_path = str(out_path)
+                            if safe_path not in batch_files:
+                                batch_files.append(safe_path)
+                            update_flist()
+                            ui.notify(f"{fname} hinzugefügt.", type="positive", color="emerald-600")
+                        except Exception as ex:
+                            ui.notify(f"Fehler beim Upload: {ex}", type="negative", color="red-600")
+
+                    # Compact upload area
+                    ui.upload(on_upload=handle_upload, multiple=True, label="Dateien wählen oder hier ablegen (MP3, WAV, MP4, M4A)"
+                              ).classes("w-full rounded-md").props("dark flat accept='.mp3,.wav,.mp4,.m4a,.ogg,.flac' color=transparent")
+
+                    # Action row: right-aligned compact start button
+                    with ui.row().classes("w-full justify-end pt-2"):
+                        async def run_batch():
+                            if not batch_files:
+                                ui.notify("Keine Dateien in der Warteschlange.", type="warning", color="amber-600")
+                                return
+                            ui.notify(f"Batch gestartet ({len(batch_files)} Dateien)...", type="info", color="sky-700")
+                            try:
+                                proc = await asyncio.create_subprocess_exec(
+                                    str(VENV_PYTHON), str(BATCH_SCRIPT), *batch_files,
+                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                                    cwd=str(PROJECT_DIR), creationflags=0x00000200
+                                )
+                                while True:
+                                    line_bytes = await proc.stdout.readline()
+                                    if not line_bytes: break
+                                    try: line = line_bytes.decode('utf-8', errors='replace').rstrip()
+                                    except: line = str(line_bytes)
+                                    if line.startswith("__BATCH_RES__:"):
+                                        _, data = line.split(":", 1)
+                                        name, raw = data.split("|", 1)
+                                        text = raw.replace("<NL>", "\n")  # decode escaped newlines
+                                        with b_res:
+                                            with ui.column().classes("w-full p-4 border border-zinc-800/60 bg-zinc-900/40 rounded-md mt-2"):
+                                                ui.label(os.path.basename(name)).classes("font-semibold text-emerald-400 text-xs tracking-wide mb-1")
+                                                ui.html(f'<p style="white-space:pre-wrap;line-height:1.75;font-size:13px;color:#d4d4d8;margin:0">{text}</p>')
+                                                ui.button("Kopieren", icon="content_copy", on_click=lambda t=text: ui.run_javascript(f"copyToClipboard({repr(t)});")).classes("btn-em shadow-none mt-2").props("flat")
+                                    else:
+                                        b_log.push(line)
+                                await proc.wait()
+                                batch_files.clear(); update_flist()
+                                ui.notify("Batch abgeschlossen.", type="positive", color="emerald-600")
+                            except Exception as ex:
+                                ui.notify(f"Subprocess-Fehler: {ex}", type="negative", color="red-600")
+
+                        ui.button("Warteschlange starten", icon="play_arrow", on_click=run_batch).classes("btn-em shadow-none").props("flat")
+
+                    ui.separator().classes("my-4 border-zinc-800")
+                    ui.label("Live Batch-Log").classes("text-[10px] font-bold text-zinc-600 uppercase tracking-wider")
+                    b_log = ui.log(max_lines=50).classes("w-full h-36 bg-[#070708] text-zinc-500 font-mono text-[11px] border border-zinc-900/80 rounded-md p-3 mt-1")
+                    b_res = ui.column().classes("w-full mt-2")
+
+
+
+
+            with ui.tab_panel(tab_sys).classes("w-full h-full overflow-y-auto"):
+                with ui.column().classes("w-full max-w-5xl mx-auto px-6 py-6 gap-4"):
+                    ui.label("Einstellungen & Engine Parameter").classes("text-lg font-semibold tracking-tight text-zinc-100 mb-2")
+                    
+                    # Tight 3-column grid
+                    with ui.element("div").classes("grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 w-full"):
+                        def build_model():
+                            sel = ui.select(options=MODEL_OPTIONS, value=cfg.get("MODEL_SIZE", "large-v3")).classes("w-full").props("dark outlined")
+                            refs["model"] = {"sel": sel}
+                        config_item("Model Auswahl", build_model)
+
+                        def buildStyle():
+                            sel = ui.select(options=STYLE_OPTIONS, value=cfg.get("TRANSCRIPTION_STYLE_PRESET", "standard")).classes("w-full").props("dark outlined")
+                            refs["style"] = {"sel": sel}
+                        config_item("KI-Stil & Formulierung", buildStyle)
+
+                        def build_sil():
+                            sl = ui.slider(min=1.0, max=5.0, step=0.1, value=cfg.get("POST_SPEECH_SILENCE_DURATION", 3.0)).props("color=emerald-500 dark snap label")
+                            refs["post_silence"] = {"slider": sl}
+                        config_item("Satz-Cutoff / Denkpause (s)", build_sil)
+
+                        def build_vad():
+                            t = ui.switch("Enable Silero VAD", value=cfg.get("VAD_ENABLED", True)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                            refs["vad"] = {"toggle": t}
+                        config_item("Voice Activity Detection", build_vad)
+
+                        def build_beam():
+                            sel = ui.select(options=[1,3,5,10], value=cfg.get("BEAM_SIZE", 5)).classes("w-full").props("dark outlined")
+                            refs["beam"] = {"sel": sel}
+                        config_item("Beam Size (Präzision)", build_beam)
+
+                        def build_lang():
+                            sel = ui.select(options=LANGUAGE_OPTIONS, value=cfg.get("LANGUAGE", "de")).classes("w-full").props("dark outlined")
+                            refs["lang"] = {"sel": sel}
+                        config_item("Erzwungene Sprache", build_lang)
+
+                        def build_device():
+                            sel = ui.select(options=DEVICE_OPTIONS, value=cfg.get("DEVICE", "cuda")).classes("w-full").props("dark outlined")
+                            refs["device"] = {"sel": sel}
+                        config_item("Hardware Device", build_device)
+
+                        def build_compute():
+                            sel = ui.select(options=COMPUTE_OPTIONS, value=cfg.get("COMPUTE_TYPE", "float16")).classes("w-full").props("dark outlined")
+                            refs["compute"] = {"sel": sel}
+                        config_item("Compute Datentyp", build_compute)
+
+                        def build_gpu():
+                            inp = ui.number(value=cfg.get("GPU_DEVICE_INDEX", 0), format="%.0f", min=0).classes("w-full").props("dark outlined")
+                            refs["gpu_idx"] = {"input": inp}
+                        config_item("GPU Index-ID", build_gpu)
+
+                        def build_mic():
+                            cur = str(cfg.get("INPUT_DEVICE_INDEX")) if cfg.get("INPUT_DEVICE_INDEX") is not None else "none"
+                            sel = ui.select(options=audio_devices, value=cur if cur in audio_devices else "none").classes("w-full").props("dark outlined")
+                            refs["input_device"] = {"sel": sel}
+                        config_item("Input Mikrofon", build_mic)
+                        
+                        def build_silero():
+                            sl = ui.slider(min=0.0, max=1.0, step=0.05, value=cfg.get("SILERO_SENSITIVITY", 0.4)).props("color=emerald-500 dark snap label")
+                            refs["silero"] = {"slider": sl}
+                        config_item("VAD Sensibilität", build_silero)
+                        
+                        def build_min():
+                            sl = ui.slider(min=0.1, max=3.0, step=0.1, value=cfg.get("MIN_LENGTH_OF_RECORDING", 0.5)).props("color=emerald-500 dark snap label")
+                            refs["min_len"] = {"slider": sl}
+                        config_item("Min. Audio-Länge (s)", build_min)
+
+                        def build_pre_buf():
+                            sl = ui.slider(min=0.0, max=5.0, step=0.1, value=cfg.get("PRE_RECORDING_BUFFER_DURATION", 1.0)).props("color=emerald-500 dark snap label")
+                            refs["pre_buf"] = {"slider": sl}
+                        config_item("Vorlauf-Puffer (s)", build_pre_buf)
+
+                        def build_cursor():
+                            t = ui.switch("Text direkt tippen", value=cfg.get("TYPE_INTO_CURSOR", False)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                            refs["cursor"] = {"toggle": t}
+                        config_item("Input Simulation", build_cursor)
+
+                    with ui.row().classes("w-full mt-4 gap-4"):
+                        with ui.column().classes("flex-1 gap-1 p-3 bg-zinc-900/70 border border-zinc-800/60 rounded-md"):
+                            ui.label("Eigene Fachbegriffe (Vokabular)").classes("text-zinc-500 text-[10px] font-bold uppercase tracking-wider")
+                            vocab_str = ", ".join(cfg.get("CUSTOM_VOCABULARY", []))
+                            area = ui.textarea(placeholder="Begriff1, Begriff2, ...", value=vocab_str).classes("w-full").props("dark outlined rows=3")
+                            refs["vocab"] = {"area": area}
+
+                        with ui.column().classes("flex-1 gap-1 p-3 bg-zinc-900/70 border border-zinc-800/60 rounded-md"):
+                            ui.label("Custom System-Prompt").classes("text-zinc-500 text-[10px] font-bold uppercase tracking-wider")
+                            area = ui.textarea(placeholder="Anweisungen zur Formatierung...", value=cfg.get("INITIAL_PROMPT_EXTRA", "")).classes("w-full").props("dark outlined rows=3")
+                            refs["prompt"] = {"area": area}
+
 
     def update_status():
-        running = process_manager.is_running()
-        if running:
-            status_dot.classes(remove="text-red-500", add="text-green-400")
-            status_label.set_text("Läuft")
-            status_label.classes(remove="text-slate-400", add="text-green-400")
-            refs["start_btn"].set_text("Stoppen")
-            refs["start_btn"].classes(
-                remove="bg-sky-500 hover:bg-sky-400",
-                add="bg-red-600 hover:bg-red-500",
-            )
+        r = process_manager.is_running()
+        if r:
+            status_dot.classes(remove="bg-zinc-600", add="bg-emerald-500")
+            status_label.set_text("Active")
+            status_label.classes(remove="text-zinc-500", add="text-emerald-500")
+            refs["main_btn"].set_text("Mikrofon deaktivieren")
+            refs["main_btn"].props(remove="icon=mic", add="icon=stop")
+            refs["main_btn"].classes(remove="btn-cta", add="btn-cta btn-cta-stop")
         else:
-            status_dot.classes(remove="text-green-400", add="text-red-500")
-            status_label.set_text("Gestoppt")
-            status_label.classes(remove="text-green-400", add="text-slate-400")
-            refs["start_btn"].set_text("Starten")
-            refs["start_btn"].classes(
-                remove="bg-red-600 hover:bg-red-500",
-                add="bg-sky-500 hover:bg-sky-400",
-            )
+            status_dot.classes(remove="bg-emerald-500", add="bg-zinc-600")
+            status_label.set_text("Offline")
+            status_label.classes(remove="text-emerald-500", add="text-zinc-500")
+            refs["main_btn"].set_text("Mikrofon aktivieren")
+            refs["main_btn"].props(remove="icon=stop", add="icon=mic")
+            refs["main_btn"].classes(remove="btn-cta btn-cta-stop", add="btn-cta")
 
-    # -----------------------------------------------------------------------
-    # 2-Spalten-Layout
-    # -----------------------------------------------------------------------
-    with ui.row().classes("w-full gap-6 items-start flex-col lg:flex-row"):
+    update_status()
 
-        # ==================================================================
-        # LINKE SPALTE — Konfiguration
-        # ==================================================================
-        with ui.column().classes("flex-1 gap-4 w-full min-w-0"):
-
-            # --- Modell ---
-            def build_model():
-                sel = ui.select(
-                    options=MODEL_OPTIONS,
-                    value=cfg.get("MODEL_SIZE", "large-v3"),
-                ).classes("w-full bg-slate-700 text-white rounded-xl").props("dark outlined dense")
-                refs["model"] = {"sel": sel}
-
-            config_card("computer", "Modell",
-                MODEL_OPTIONS.get(cfg.get("MODEL_SIZE", "large-v3"), cfg.get("MODEL_SIZE", "")),
-                "Bestimmt Genauigkeit, Geschwindigkeit und VRAM-Bedarf.",
-                build_model)
-
-            # --- Compute Type ---
-            def build_compute():
-                sel = ui.select(
-                    options=COMPUTE_OPTIONS,
-                    value=cfg.get("COMPUTE_TYPE", "float16"),
-                ).classes("w-full bg-slate-700 text-white rounded-xl").props("dark outlined dense")
-
-                def on_compute_change(e):
-                    if e.value in ("int8", "int8_float16"):
-                        ui.notify(
-                            "INT8/int8_float16 sind für Blackwell (sm_120) deaktiviert — bitte float16 oder bfloat16 verwenden!",
-                            type="negative", timeout=6000,
-                        )
-                sel.on("update:model-value", on_compute_change)
-                refs["compute"] = {"sel": sel}
-
-            config_card("memory", "Compute Type",
-                cfg.get("COMPUTE_TYPE", "float16"),
-                "Für RTX 5080 (Blackwell sm_120): float16 oder bfloat16.",
-                build_compute)
-
-            # --- Sprache ---
-            def build_language():
-                sel = ui.select(
-                    options=LANGUAGE_OPTIONS,
-                    value=cfg.get("LANGUAGE", "de"),
-                ).classes("w-full bg-slate-700 text-white rounded-xl").props("dark outlined dense")
-                refs["lang"] = {"sel": sel}
-
-            config_card("language", "Sprache",
-                LANGUAGE_OPTIONS.get(cfg.get("LANGUAGE", "de"), ""),
-                "Sprache der Spracherkennung. 'Auto' ist langsamer.",
-                build_language)
-
-            # --- Beam Size ---
-            def build_beam():
-                with ui.row().classes("items-center gap-4 w-full"):
-                    slider = ui.slider(min=1, max=10, value=cfg.get("BEAM_SIZE", 5)).classes("flex-1").props("color=sky-4 dark")
-                    lbl = ui.label(str(cfg.get("BEAM_SIZE", 5))).classes("text-sky-400 text-lg font-medium w-6 text-right")
-                    slider.on("update:model-value", lambda e: lbl.set_text(str(int(e.args))))
-                    refs["beam"] = {"slider": slider}
-
-            config_card("tune", "Beam Size",
-                str(cfg.get("BEAM_SIZE", 5)),
-                "Dekodierungsgenauigkeit. 1 = schnell, 10 = präzise.",
-                build_beam)
-
-            # --- Initial Prompt ---
-            def build_prompt():
-                area = ui.textarea(
-                    placeholder="Kontext für Whisper (Interpunktion, Stil, Formatierung)…",
-                    value=cfg.get("INITIAL_PROMPT_EXTRA", ""),
-                ).classes("w-full bg-slate-700 text-white rounded-xl").props("dark outlined dense rows=3")
-                refs["prompt"] = {"area": area}
-
-            config_card("edit_note", "Initial Prompt",
-                "Kontext & Formatierungshinweise",
-                "Gibt Whisper Stil-Vorgaben. Fachbegriffe werden automatisch aus dem Vokabular angehängt.",
-                build_prompt)
-
-            # --- Audio-Eingabequelle ---
-            def build_audio_device():
-                current_idx = cfg.get("INPUT_DEVICE_INDEX")
-                current_val = str(current_idx) if current_idx is not None else "none"
-                sel = ui.select(
-                    options=audio_devices,
-                    value=current_val if current_val in audio_devices else "none",
-                ).classes("w-full bg-slate-700 text-white rounded-xl").props("dark outlined dense")
-                refs["input_device"] = {"sel": sel}
-
-            config_card("mic", "Audio-Eingabequelle",
-                audio_devices.get(
-                    str(cfg.get("INPUT_DEVICE_INDEX")) if cfg.get("INPUT_DEVICE_INDEX") is not None else "none",
-                    "System-Standard"
-                ),
-                "Mikrofon oder virtuelles Kabel. System-Standard = Windows-Standardgerät.",
-                build_audio_device)
-
-            # --- VAD + Silero-Sensitivity ---
-            def build_vad():
-                with ui.column().classes("gap-3 w-full"):
-                    toggle = ui.switch(
-                        text="Voice Activity Detection (Silero VAD)",
-                        value=cfg.get("VAD_ENABLED", True),
-                    ).classes("text-white").props("color=sky-4 dark")
-                    refs["vad"] = {"toggle": toggle}
-
-                    with ui.row().classes("items-center gap-4 w-full"):
-                        ui.label("Silero-Empfindlichkeit:").classes("text-slate-400 text-xs w-40")
-                        slider = ui.slider(min=0.0, max=1.0, step=0.05, value=cfg.get("SILERO_SENSITIVITY", 0.4)).classes("flex-1").props("color=sky-4 dark")
-                        lbl = ui.label(f"{cfg.get('SILERO_SENSITIVITY', 0.4):.2f}").classes("text-sky-400 text-sm w-10 text-right")
-                        slider.on("update:model-value", lambda e: lbl.set_text(f"{float(e.args):.2f}"))
-                        refs["silero"] = {"slider": slider}
-
-            config_card("graphic_eq", "VAD & Empfindlichkeit",
-                "Silero VAD",
-                "Filtert Stille heraus, spart Rechenleistung und reduziert Halluzinationen.",
-                build_vad)
-
-            # --- Custom Vocabulary ---
-            vocab_row_ref = {}
-
-            def build_vocab():
-                with ui.row().classes("items-center gap-2 w-full mb-2"):
-                    vocab_input = ui.input(placeholder="Begriff hinzufügen…").classes(
-                        "bg-slate-700 text-white rounded-xl flex-1"
-                    ).props("dark outlined dense")
-
-                    def add_vocab():
-                        term = vocab_input.value.strip()
-                        if term and term not in vocab_list:
-                            vocab_list.append(term)
-                            _add_vocab_chip(vocab_row_ref["row"], term, vocab_list)
-                        vocab_input.set_value("")
-
-                    vocab_input.on("keydown.enter", lambda: add_vocab())
-                    ui.button(icon="add", on_click=add_vocab).classes(
-                        "bg-sky-500 hover:bg-sky-400 text-white rounded-xl"
-                    ).props("flat dense")
-
-                with ui.row().classes("flex-wrap gap-2 w-full") as chip_row:
-                    vocab_row_ref["row"] = chip_row
-                    for term in vocab_list:
-                        _add_vocab_chip(chip_row, term, vocab_list)
-
-            config_card("label", "Custom Vocabulary",
-                f"{len(vocab_list)} Begriffe",
-                "Fachbegriffe die Whisper bevorzugt erkennen soll.",
-                build_vocab)
-
-            # --- Keyword Expansions ---
-            def build_expansions():
-                columns = [
-                    {"name": "key", "label": "Schlüsselwort", "field": "key", "align": "left"},
-                    {"name": "val", "label": "Ersetzungstext", "field": "val", "align": "left"},
-                    {"name": "del", "label": "", "field": "del", "align": "center", "style": "width:40px"},
-                ]
-                table = ui.table(columns=columns, rows=expansions, row_key="key").classes(
-                    "w-full bg-slate-700 text-white rounded-xl text-sm"
-                ).props("dark flat dense")
-                table.add_slot("body-cell-del", """
-                    <q-td :props="props">
-                        <q-btn flat round dense icon="delete" color="red-4"
-                            @click="$parent.$emit('delete-row', props.row)" />
-                    </q-td>
-                """)
-                table.on("delete-row", lambda e: _delete_table_row(expansions, e.args, "key", table))
-
-                with ui.row().classes("gap-2 mt-2 items-center"):
-                    k_in = ui.input(placeholder="Schlüssel").classes("bg-slate-700 text-white rounded-xl flex-1").props("dark outlined dense")
-                    v_in = ui.input(placeholder="Ersetzung").classes("bg-slate-700 text-white rounded-xl flex-1").props("dark outlined dense")
-
-                    def add_exp():
-                        k, v = k_in.value.strip(), v_in.value.strip()
-                        if k:
-                            expansions.append({"key": k, "val": v})
-                            table.rows = expansions
-                            table.update()
-                            k_in.set_value("")
-                            v_in.set_value("")
-
-                    ui.button(icon="add", on_click=add_exp).classes(
-                        "bg-sky-500 hover:bg-sky-400 text-white rounded-xl"
-                    ).props("flat dense")
-
-            config_card("swap_horiz", "Keyword Expansionen",
-                f"{len(expansions)} Einträge",
-                "Erkannte Abkürzungen werden automatisch ausgeschrieben.",
-                build_expansions)
-
-            # --- Corrections ---
-            def build_corrections():
-                columns = [
-                    {"name": "von",  "label": "Von (Regex)", "field": "von",  "align": "left"},
-                    {"name": "nach", "label": "Nach",        "field": "nach", "align": "left"},
-                    {"name": "del",  "label": "",            "field": "del",  "align": "center", "style": "width:40px"},
-                ]
-                table = ui.table(columns=columns, rows=corrections, row_key="von").classes(
-                    "w-full bg-slate-700 text-white rounded-xl text-sm"
-                ).props("dark flat dense")
-                table.add_slot("body-cell-del", """
-                    <q-td :props="props">
-                        <q-btn flat round dense icon="delete" color="red-4"
-                            @click="$parent.$emit('delete-row', props.row)" />
-                    </q-td>
-                """)
-                table.on("delete-row", lambda e: _delete_table_row(corrections, e.args, "von", table))
-
-                with ui.row().classes("gap-2 mt-2 items-center"):
-                    v_in = ui.input(placeholder=r"Von (z.B. \bFalsch\b)").classes("bg-slate-700 text-white rounded-xl flex-1").props("dark outlined dense")
-                    n_in = ui.input(placeholder="Nach").classes("bg-slate-700 text-white rounded-xl flex-1").props("dark outlined dense")
-
-                    def add_cor():
-                        v, n = v_in.value.strip(), n_in.value.strip()
-                        if v:
-                            corrections.append({"von": v, "nach": n})
-                            table.rows = corrections
-                            table.update()
-                            v_in.set_value("")
-                            n_in.set_value("")
-
-                    ui.button(icon="add", on_click=add_cor).classes(
-                        "bg-sky-500 hover:bg-sky-400 text-white rounded-xl"
-                    ).props("flat dense")
-
-            config_card("spellcheck", "Korrekturen",
-                f"{len(corrections)} Regeln",
-                "Whisper-Erkennungsfehler automatisch korrigieren.",
-                build_corrections)
-
-            # --- Ausgabe ---
-            def build_output():
-                with ui.column().classes("gap-3 w-full"):
-                    toggle = ui.switch(
-                        text="Text an Cursor-Position tippen",
-                        value=cfg.get("TYPE_INTO_CURSOR", True),
-                    ).classes("text-white").props("color=sky-4 dark")
-                    refs["cursor"] = {"toggle": toggle}
-
-                    with ui.row().classes("items-center gap-2 w-full"):
-                        out_input = ui.input(
-                            label="Ausgabedatei (leer = deaktiviert)",
-                            value=cfg.get("OUTPUT_FILE") or "",
-                        ).classes("bg-slate-700 text-white rounded-xl flex-1").props("dark outlined dense")
-                        refs["outfile"] = {"input": out_input}
-
-                        def pick_file():
-                            root = tk.Tk()
-                            root.withdraw()
-                            root.wm_attributes("-topmost", True)
-                            path = fd.asksaveasfilename(
-                                title="Ausgabedatei wählen",
-                                defaultextension=".txt",
-                                filetypes=[("Textdatei", "*.txt"), ("Alle Dateien", "*.*")],
-                                initialfile="transkription.txt",
-                            )
-                            root.destroy()
-                            if path:
-                                out_input.set_value(path)
-
-                        ui.button(icon="folder_open", on_click=pick_file).classes(
-                            "bg-slate-700 hover:bg-slate-600 text-sky-400 rounded-xl"
-                        ).props("flat dense").tooltip("Datei auswählen")
-
-            config_card("output", "Ausgabe",
-                "Cursor-Tippen + Datei",
-                "Wohin der transkribierte Text geschrieben wird.",
-                build_output)
-
-        # ==================================================================
-        # RECHTE SPALTE — sticky, Steuerung + Live-Log
-        # ==================================================================
-        with ui.column().classes("w-full lg:w-96 gap-4").style("position: sticky; top: 1rem; align-self: flex-start;"):
-
-            # --- Steuerung ---
-            with ui.card().classes("w-full bg-slate-800 rounded-2xl shadow-xl p-5"):
-                with ui.row().classes("items-center gap-3 mb-4"):
-                    ui.icon("play_circle").classes("text-sky-400 text-3xl")
-                    ui.label("Steuerung").classes("text-white text-lg font-medium")
-
-                async def toggle_transcription():
-                    if process_manager.is_running():
-                        await process_manager.stop_transcription()
-                    else:
-                        await process_manager.start_transcription()
-                    update_status()
-
-                start_btn = ui.button("Starten", on_click=toggle_transcription).classes(
-                    "w-full bg-sky-500 hover:bg-sky-400 text-white font-medium "
-                    "rounded-xl py-2 shadow-lg"
-                ).props("flat")
-                refs["start_btn"] = start_btn
-                update_status()
-
-            # --- Live-Log ---
-            with ui.card().classes("w-full bg-slate-800 rounded-2xl shadow-xl p-5"):
-                with ui.row().classes("items-center gap-3 mb-3"):
-                    ui.icon("subtitles").classes("text-sky-400 text-3xl")
-                    ui.label("Live-Transkription").classes("text-white text-lg font-medium")
-
-                log = ui.log(max_lines=200).classes(
-                    "w-full h-96 bg-slate-900 text-slate-300 text-sm rounded-xl font-mono"
-                )
-
-                for line in process_manager.get_log_buffer():
-                    log.push(line)
-
-                process_manager.on_new_line(lambda line: log.push(line))
-
-                ui.button("Log leeren", on_click=log.clear).classes(
-                    "mt-2 text-slate-400 text-xs"
-                ).props("flat dense")
-
-
-# ---------------------------------------------------------------------------
-# Hilfsfunktionen
-# ---------------------------------------------------------------------------
-
-def _add_vocab_chip(container, term: str, vocab_list: list):
-    with container:
-        with ui.row().classes(
-            "items-center gap-1 bg-slate-700 text-sky-400 text-xs rounded-full px-3 py-1"
-        ):
-            ui.label(term)
-            ui.button(
-                icon="close",
-                on_click=lambda t=term: _remove_vocab(t, vocab_list, container),
-            ).classes("text-slate-400 hover:text-red-400 w-4 h-4").props("flat round dense size=xs")
-
-
-def _remove_vocab(term: str, vocab_list: list, container):
-    if term in vocab_list:
-        vocab_list.remove(term)
-    container.clear()
-    for t in vocab_list:
-        _add_vocab_chip(container, t, vocab_list)
-
-
-def _delete_table_row(rows: list, row_data: dict, key: str, table):
-    key_val = row_data.get(key)
-    for i, r in enumerate(rows):
-        if r.get(key) == key_val:
-            rows.pop(i)
-            break
-    table.rows = rows
-    table.update()
-
-
-# ---------------------------------------------------------------------------
-# App starten
-# ---------------------------------------------------------------------------
-ui.run(
-    title="Whisper UI",
-    port=8080,
-    dark=True,
-    favicon="🎙",
-    reload=False,
-)
+if __name__ in {"__main__", "__mp_main__"}:
+    ui.run(title="Whisper AI", port=8080, dark=True, reload=False, show=False)

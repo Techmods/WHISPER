@@ -39,9 +39,12 @@ from config import (
     CUSTOM_VOCABULARY,
     KEYWORD_EXPANSIONS,
     CORRECTIONS,
+    INITIAL_PROMPT_EXTRA,
     SILERO_SENSITIVITY,
     MIN_LENGTH_OF_RECORDING,
     PRE_RECORDING_BUFFER_DURATION,
+    POST_SPEECH_SILENCE_DURATION,
+    TRANSCRIPTION_STYLE_PRESET,
     TIMESTAMP_FORMAT,
     OUTPUT_SEPARATOR,
     TYPE_INTO_CURSOR,
@@ -54,6 +57,11 @@ pyautogui.PAUSE = 0
 
 # Ausgabedatei oeffnen (append-Modus, bleibt ueber die gesamte Session offen)
 _output_file = open(OUTPUT_FILE, "a", encoding="utf-8") if OUTPUT_FILE else None
+
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 
 
 # =============================================================================
@@ -140,30 +148,25 @@ def process_text(raw_text: str) -> str:
 # =============================================================================
 
 def build_initial_prompt(vocabulary: list) -> str:
-    if not vocabulary:
-        return "Dies ist eine saubere Transkription auf Deutsch, die korrekte Satzzeichen und Grammatik verwendet."
+    """
+    Erstellt den initial_prompt fuer Whisper abhaengig vom Stil.
+    """
+    style_prompts = {
+        "standard": "Saubere Transkription auf Deutsch mit korrekten Satzzeichen.",
+        "code": "Technischer Text mit Fokus auf Code, Variablen und Programmierung. Bitte exakte Bezeichnungen beibehalten.",
+        "raw": "transkription ohne punkt und komma schreibe alles relativ roh auf"
+    }
     
-    # Wir betten die Fachbegriffe in einen vorbildlichen Satz ein:
-    terms = ", ".join(vocabulary)
-    return f"In diesem Gespräch nutzen wir Fachbegriffe wie {terms}. Bitte achte auf korrekte Interpunktion, Kommasetzung und Großschreibung."
+    style_txt = style_prompts.get(TRANSCRIPTION_STYLE_PRESET, style_prompts["standard"])
+    base_prompt = INITIAL_PROMPT_EXTRA or ""
+    
+    final_prompt = f"{style_txt} {base_prompt}".strip()
 
-
-def build_hotwords(vocabulary: list) -> str:
-    """
-    Erstellt den hotwords-String fuer RealtimeSTT aus der Vocabulary-Liste.
-
-    Hotwords erhoehen die Wahrscheinlichkeit, dass Whisper diese Woerter
-    korrekt erkennt. Format: leerzeichen- oder kommagetrennte Woerter.
-
-    Args:
-        vocabulary: Liste der Fachbegriffe.
-
-    Returns:
-        Leerzeichengetrennter String der Fachbegriffe.
-    """
-    if not vocabulary:
-        return ""
-    return " ".join(vocabulary)
+    if vocabulary:
+        terms = ", ".join(vocabulary)
+        final_prompt += f" Fachbegriffe: {terms}."
+        
+    return final_prompt
 
 
 def get_timestamp() -> str:
@@ -222,6 +225,7 @@ def on_transcription_complete(text: str) -> None:
 
     # Konsole
     print_transcription(processed)
+    print(f"__TRANSCRIPT__:{processed}", flush=True)
 
     # In Datei schreiben
     if _output_file:
@@ -316,15 +320,20 @@ def main() -> None:
         "gpu_device_index": GPU_DEVICE_INDEX,
         "beam_size": BEAM_SIZE,
 
-        # Custom Vocabulary (hotwords werden via initial_prompt uebergeben)
+        # Prompt für Kontext und Formatierung
         "initial_prompt": initial_prompt,
+
+        # Einstellungen für Groß-/Kleinschreibung und Satzenden
+        "ensure_sentence_starting_uppercase": True,
+        "ensure_sentence_ends_with_period": True,
 
         # Audio / VAD (Voice Activity Detection)
         "silero_sensitivity": SILERO_SENSITIVITY,
         "min_length_of_recording": MIN_LENGTH_OF_RECORDING,
         "pre_recording_buffer_duration": PRE_RECORDING_BUFFER_DURATION,
+        "post_speech_silence_duration": POST_SPEECH_SILENCE_DURATION,
 
-        # Echtzeit-Transkriptions-Vorschau: Hauptmodell wiederverwenden (kein zweiter GPU-Index)
+        # Echtzeit-Transkriptions-Vorschau: Hauptmodell wiederverwenden
         "enable_realtime_transcription": True,
         "use_main_model_for_realtime": True,
         "realtime_processing_pause": 0.2,

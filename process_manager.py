@@ -79,21 +79,18 @@ async def stop_transcription() -> bool:
     if not is_running():
         return False
 
+    import subprocess
     try:
-        # Windows: CTRL_BREAK_EVENT an Prozessgruppe senden (entspricht SIGINT)
-        os.kill(_process.pid, signal.CTRL_BREAK_EVENT)
-    except (OSError, ProcessLookupError):
-        pass
-
-    try:
-        await asyncio.wait_for(_process.wait(), timeout=5.0)
-    except asyncio.TimeoutError:
-        # Prozess reagiert nicht — hart beenden
+        # Windows: Gesamten Prozessbaum rigoros abtöten um Zombie-Prozesse und Handle-Locks zu vermeiden
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(_process.pid)], capture_output=True, check=False)
+        
+        # Sicherstellen dass der Async-Loop weiß, dass der Prozess beendet wurde
         try:
-            _process.kill()
-            await _process.wait()
-        except Exception:
+            await asyncio.wait_for(_process.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
             pass
+    except Exception:
+        pass
 
     _process = None
     return True
@@ -112,6 +109,10 @@ async def _read_stdout() -> None:
                 line = line_bytes.decode("utf-8", errors="replace").rstrip()
             except Exception:
                 line = str(line_bytes)
+
+            lower_line = line.lower()
+            if "speak now" in lower_line or "listening..." in lower_line or "voice activity detected" in lower_line or "transcribing..." in lower_line:
+                continue
 
             _log_buffer.append(line)
 
