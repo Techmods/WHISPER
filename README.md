@@ -1,6 +1,6 @@
 # WHISPER — Live-Transkriptionssystem
 
-Echtzeit-Spracherkennung auf Deutsch mit [faster-whisper](https://github.com/SYSTRAN/faster-whisper) und GPU-Beschleunigung. Transkribierter Text wird direkt an die aktuelle Cursor-Position getippt und parallel in eine Datei geschrieben. Alle Einstellungen sind über eine lokale Web-UI konfigurierbar.
+Echtzeit-Spracherkennung auf Deutsch mit [faster-whisper](https://github.com/SYSTRAN/faster-whisper). Läuft auf GPU (CUDA) und CPU. Transkribierter Text wird direkt an die aktuelle Cursor-Position getippt und parallel in eine Datei geschrieben. Alle Einstellungen sind über eine lokale Web-UI konfigurierbar.
 
 ## Hardware
 
@@ -152,9 +152,27 @@ Alle Parameter in `config.py` — entweder manuell oder über die Web-UI:
 | `TYPE_INTO_CURSOR` | Text an Cursor-Position tippen | `True` |
 | `OUTPUT_FILE` | Pfad zur Ausgabedatei (`None` = deaktiviert) | `transkription.txt` |
 
-## Blackwell-Hinweis (RTX 5080)
+## Hardware-Konfigurationsempfehlungen
 
-CTranslate2 ≥ 4.6.3 unterstützt Blackwell (sm_120), hat aber INT8 explizit deaktiviert. `compute_type` muss `float16` oder `bfloat16` sein — INT8 und int8_float16 werfen einen Fehler.
+### NVIDIA GPU
+
+| Hardware | `DEVICE` | `COMPUTE_TYPE` | `BEAM_SIZE` | Hinweis |
+|---|---|---|---|---|
+| RTX 5090/5080 (Blackwell, sm_120) | `cuda` | `float16` | 5 | ⚠️ INT8 auf sm_120 deaktiviert — `float16` oder `bfloat16` Pflicht |
+| RTX 4090/4080 (Ada, sm_89) | `cuda` | `float16` | 5 | `int8_float16` als Alternative bei VRAM-Knappheit |
+| RTX 3090/3080 (Ampere, sm_86) | `cuda` | `float16` | 5 | `int8_float16` ebenfalls unterstützt |
+| RTX 2070/2080 (Turing, sm_75) | `cuda` | `int8_float16` | 5 | INT8 spart VRAM, FP16-Unterstützung vorhanden |
+| GTX 1080/1070 (Pascal, sm_61) | `cuda` | `float32` | 3 | ⚠️ Kein natives FP16 — `float32` zwingend |
+
+### CPU
+
+| Hardware-Klasse | `DEVICE` | `COMPUTE_TYPE` | `BEAM_SIZE` | Hinweis |
+|---|---|---|---|---|
+| High-End (Ryzen 7/9, i7/i9 12th+) | `cpu` | `int8` | 5 | INT8 reduziert Speicher ~73 %; oneDNN (AMD) / MKL (Intel) |
+| Mid-Range (Ryzen 5, i5 12th+) | `cpu` | `int8` | 3–5 | `beam_size=3` für bessere Echtzeit-Performance |
+| Ältere / schwache CPU | `cpu` | `float32` | 1–3 | INT8 erfordert MKL/oneDNN-Support; `beam_size=1` für maximale Geschwindigkeit |
+
+> **CPU-Tipp:** `DEVICE = 'cpu'` und `COMPUTE_TYPE = 'int8'` reichen für gute Qualität — kleinere Modelle (`small`, `medium`) empfehlenswert für flüssige Echtzeit-Transkription.
 
 ## GPU testen
 
