@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./venv/Scripts/python.exe whisper_ui.py)",
+      "Bash(tasklist /fi \"IMAGENAME eq python.exe\")",
+      "Bash(cmd /c 'tasklist /fi \"IMAGENAME eq python.exe\" 2>&1')",
+      "Bash(cmd /c \"wmic process where \\\\\"name='python.exe'\\\\\" get ProcessId,CommandLine 2>&1\")",
+      "Bash(cmd /c \"tasklist /fi \\\\\"IMAGENAME eq python.exe\\\\\"\")",
+      "Bash(cmd /c \"cd /d C:\\\\\\\\DEV\\\\\\\\WHISPER && call startui.bat\")",
+      "Bash(cat \"C:\\\\\\\\Users\\\\\\\\Andy\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--DEV-WHISPER\\\\\\\\8c7bff4c-5602-411a-b294-685d6aad5c52\\\\\\\\tasks\\\\\\\\b9pjmpw7b.output\")",
+      "Bash(cmd /c \"netstat -ano | findstr :8080\")",
+      "Bash(cmd /c \"tasklist /fi \\\\\"IMAGENAME eq pythonw.exe\\\\\"\")",
+      "Skill(commit-commands:commit-push-pr)",
+      "Skill(commit-commands:commit-push-pr:*)"
+    ]
+  }
+}
