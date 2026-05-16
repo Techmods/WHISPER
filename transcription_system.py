@@ -49,6 +49,7 @@ from config import (
     OUTPUT_SEPARATOR,
     TYPE_INTO_CURSOR,
     OUTPUT_FILE,
+    TASK,
 )
 
 # pyautogui: kein Failsafe (Maus in Ecke wuerde sonst abbrechen)
@@ -59,9 +60,14 @@ pyautogui.PAUSE = 0
 _output_file = open(OUTPUT_FILE, "a", encoding="utf-8") if OUTPUT_FILE else None
 
 try:
-    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 except Exception:
     pass
+
+
+def emit_state(state: str) -> None:
+    """Sendet einen Lifecycle-State an den Parent (process_manager)."""
+    print(f"[STATE:{state}]", flush=True)
 
 
 # =============================================================================
@@ -252,13 +258,12 @@ def on_transcription_partial(text: str) -> None:
 
 def on_recording_start() -> None:
     """Callback: Mikrofon-Aufnahme hat begonnen."""
-    # Optional: akustisches oder visuelles Signal
-    pass
+    emit_state("recording")
 
 
 def on_recording_stop() -> None:
     """Callback: Mikrofon-Aufnahme wurde beendet, Transkription beginnt."""
-    pass
+    emit_state("ready")
 
 
 # =============================================================================
@@ -307,6 +312,7 @@ def main() -> None:
         sys.exit(1)
 
     # --- Recorder konfigurieren und starten ---
+    emit_state("loading_model")
     print("\n  Initialisiere AudioToTextRecorder...")
     print("  (Beim ersten Start wird das Whisper-Modell heruntergeladen.)")
     print("  Bitte warten...\n")
@@ -368,6 +374,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, handle_shutdown)
 
     # --- Bereit ---
+    emit_state("ready")
     print(OUTPUT_SEPARATOR)
     print("  System bereit. Sprechen Sie ins Mikrofon.")
     print("  Beenden mit Strg+C")

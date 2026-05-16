@@ -21,6 +21,7 @@ UI_KEYS = {
     "GPU_DEVICE_INDEX",
     "LANGUAGE",
     "BEAM_SIZE",
+    "TASK",
     "INITIAL_PROMPT_EXTRA",
     "CUSTOM_VOCABULARY",
     "KEYWORD_EXPANSIONS",
@@ -91,10 +92,15 @@ def write_config(updates: dict) -> None:
             continue
 
         val_node = node.value
-        # Zeilenbasierte Positionen in Zeichenoffsets umrechnen
         lines = source.splitlines(keepends=True)
         start_offset = _line_col_to_offset(lines, val_node.lineno, val_node.col_offset)
-        end_offset = _line_col_to_offset(lines, val_node.end_lineno, val_node.end_col_offset)
+
+        # end_col_offset kann bei Non-ASCII-Zeichen Byte-Offsets statt Zeichen-Offsets liefern.
+        # ast.get_source_segment() gibt den tatsächlichen Quelltext zurück — längenbasiertes Ende.
+        segment = ast.get_source_segment(source, val_node)
+        if segment is None:
+            continue
+        end_offset = start_offset + len(segment)
 
         new_repr = _to_repr(updates[target.id])
         replacements.append((start_offset, end_offset, new_repr))
@@ -105,11 +111,20 @@ def write_config(updates: dict) -> None:
     # Von hinten nach vorne ersetzen (Offsets bleiben stabil)
     replacements.sort(key=lambda x: x[0], reverse=True)
     for start, end, new_repr in replacements:
-        source = source[:start] + new_repr + source[end:]
+        tail = source[end:]
+        # Falls direkt nach dem Wert kein Whitespace folgt, Zeilenumbruch einfügen
+        if tail and not tail[0].isspace():
+            tail = "\n" + tail
+        source = source[:start] + new_repr + tail
 
     # CRLF wiederherstellen wenn original CRLF
     if crlf:
         source = source.replace("\n", "\r\n")
+
+    try:
+        ast.parse(source)
+    except SyntaxError as e:
+        raise RuntimeError(f"write_config: Ergebnis wäre ungültiges Python ({e}) — Datei nicht geschrieben.") from e
 
     tmp_path = CONFIG_PATH.with_suffix(".py.tmp")
     tmp_path.write_text(source, encoding="utf-8")

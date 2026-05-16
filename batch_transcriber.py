@@ -6,7 +6,7 @@ from faster_whisper import WhisperModel
 from config import (
     MODEL_SIZE, COMPUTE_TYPE, DEVICE, GPU_DEVICE_INDEX,
     LANGUAGE, BEAM_SIZE, CUSTOM_VOCABULARY, INITIAL_PROMPT_EXTRA,
-    TRANSCRIPTION_STYLE_PRESET
+    TRANSCRIPTION_STYLE_PRESET, TASK
 )
 from transcription_system import build_initial_prompt, process_text
 
@@ -43,10 +43,11 @@ def run_batch(files: list[str]):
             lang = None if LANGUAGE in ("auto", "None", "") else LANGUAGE
             
             segments, info = model.transcribe(
-                filepath, 
-                language=lang, 
-                beam_size=BEAM_SIZE, 
-                initial_prompt=initial_prompt
+                filepath,
+                language=lang,
+                beam_size=BEAM_SIZE,
+                initial_prompt=initial_prompt,
+                task=TASK,
             )
             
             full_text = []
