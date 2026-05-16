@@ -10,6 +10,7 @@ from nicegui import ui, app
 import sounddevice as sd
 import config_rw
 import process_manager
+import refine
 
 PROJECT_DIR = Path(__file__).parent
 VENV_PYTHON = PROJECT_DIR / "venv" / "Scripts" / "python.exe"
@@ -27,6 +28,33 @@ COMPUTE_OPTIONS = {"float16": "float16", "bfloat16": "bfloat16"}
 DEVICE_OPTIONS = {"cuda": "GPU (CUDA)", "cpu": "CPU"}
 LANGUAGE_OPTIONS = {"de": "Deutsch", "en": "Englisch", "auto": "Automatisch"}
 STYLE_OPTIONS = {"standard": "Standard (Sauber, Interpunktion)", "code": "Technical / Code", "raw": "Roh (ohne Satzzeichen)"}
+REFINE_TARGET_OPTIONS = {
+    "en": "Englisch",
+    "de": "Deutsch",
+    "fr": "Französisch",
+    "es": "Spanisch",
+    "it": "Italienisch",
+    "pt": "Portugiesisch",
+    "nl": "Niederländisch",
+    "pl": "Polnisch",
+    "ja": "Japanisch",
+    "zh": "Chinesisch",
+}
+
+class _ToggleBridge:
+    """
+    Adapter, damit ein ui.select-Element wie ein Toggle gelesen werden kann.
+    refs[…]["toggle"].value == (select.value == true_value)
+    Verwendet für den Modus-Dropdown, der semantisch REFINE_TRANSLATE setzt.
+    """
+    def __init__(self, sel, true_value):
+        self._sel = sel
+        self._true_value = true_value
+
+    @property
+    def value(self) -> bool:
+        return self._sel.value == self._true_value
+
 
 def get_audio_devices() -> dict:
     devices = {"none": "System-Standard"}
@@ -215,7 +243,18 @@ async def index():
             "PRE_RECORDING_BUFFER_DURATION": round(refs["pre_buf"]["slider"].value, 1),
             "POST_SPEECH_SILENCE_DURATION": round(refs["post_silence"]["slider"].value, 1),
             "TYPE_INTO_CURSOR": refs["cursor"]["toggle"].value,
-            "TASK": refs["task"]["sel"].value,
+            # TASK bleibt als Whisper-Engine-Setting nominell erhalten,
+            # wird aber nicht mehr an den Recorder durchgereicht.
+            # Modus-Dropdown steuert jetzt REFINE_TRANSLATE.
+            "TASK": "transcribe",
+            "REFINE_ENABLED": refs["refine_enabled"]["toggle"].value,
+            "REFINE_MODEL": refs["refine_model"]["sel"].value or "",
+            "REFINE_ENDPOINT": refs["refine_endpoint"]["input"].value.strip() or "http://localhost:1234/v1/chat/completions",
+            "REFINE_TRANSLATE": refs["refine_translate"]["toggle"].value,
+            "REFINE_TARGET_LANGUAGE": refs["refine_target"]["sel"].value,
+            "REFINE_STRIP_FILLERS": refs["refine_filler"]["toggle"].value,
+            "REFINE_BACKTRACK": refs["refine_backtrack"]["toggle"].value,
+            "REFINE_TIMEOUT_S": float(refs["refine_timeout"]["input"].value),
         }
         try:
             config_rw.write_config(updates)
@@ -494,13 +533,65 @@ async def index():
                                 refs["cursor"] = {"toggle": t}
                             config_item("Input Simulation", build_cursor, "Schreibt transkribierten Text direkt an die Cursor-Position (via Zwischenablage). Vorher Fokus auf Zielfenster setzen.")
 
-                            def build_task():
+                            # === REFINE-LAYER (LM Studio) ===
+                            def build_refine_enabled():
+                                t = ui.switch("LLM-Refine aktivieren", value=cfg.get("REFINE_ENABLED", False)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                                refs["refine_enabled"] = {"toggle": t}
+                            config_item("Refine-Layer (LLM)", build_refine_enabled, "Master-Schalter. Schickt jedes Diktat nach Whisper durch LM Studio (lokal). Wenn aus, sind die anderen Refine-Optionen wirkungslos.")
+
+                            def build_refine_model():
+                                models = refine.list_models(cfg.get("REFINE_ENDPOINT", "http://localhost:1234/v1/chat/completions"))
+                                current = cfg.get("REFINE_MODEL", "")
+                                # Aktuelles Modell ergänzen, falls (noch) nicht in der Liste
+                                if current and current not in models:
+                                    models.insert(0, current)
+                                with ui.row().classes("w-full items-center gap-1 flex-nowrap"):
+                                    sel = ui.select(options=models or [current] if current else [], value=current, with_input=True).classes("w-full flex-1 min-w-0").props("dark outlined")
+                                    refs["refine_model"] = {"sel": sel}
+                                    def reload_models():
+                                        new_list = refine.list_models(refs["refine_endpoint"]["input"].value or "http://localhost:1234/v1/chat/completions")
+                                        cur = sel.value
+                                        if cur and cur not in new_list:
+                                            new_list.insert(0, cur)
+                                        sel.set_options(new_list, value=cur if cur in new_list else (new_list[0] if new_list else None))
+                                        ui.notify(f"{len(new_list)} Modelle geladen.", type="info", color="sky-600")
+                                    ui.button(icon="refresh", on_click=reload_models).classes("btn-ghost shadow-none shrink-0").props("flat dense")
+                            config_item("Refine-Modell", build_refine_model, "Modell aus LM Studio. Klick Refresh um die Liste neu zu laden.")
+
+                            def build_mode():
+                                # Semantisch: setzt REFINE_TRANSLATE-Toggle bei Auswahl.
+                                current = "translate" if cfg.get("REFINE_TRANSLATE", False) else "transcribe"
                                 sel = ui.select(
-                                    options={"transcribe": "Transkription (Original)", "translate": "Übersetzung → Englisch"},
-                                    value=cfg.get("TASK", "transcribe")
+                                    options={"transcribe": "Transkription (Original)", "translate": "Übersetzung (siehe Zielsprache)"},
+                                    value=current,
                                 ).classes("w-full").props("dark outlined")
-                                refs["task"] = {"sel": sel}
-                            config_item("Modus", build_task, "Transkription: Text in Originalsprache. Übersetzung: Audio beliebiger Sprache wird direkt ins Englische übersetzt.")
+                                refs["refine_translate"] = {"toggle": _ToggleBridge(sel, "translate")}
+                            config_item("Modus", build_mode, "Originalsprache lassen oder via LLM in die unten gewählte Zielsprache übersetzen. Benötigt aktivierten Refine-Layer.")
+
+                            def build_refine_target():
+                                sel = ui.select(options=REFINE_TARGET_OPTIONS, value=cfg.get("REFINE_TARGET_LANGUAGE", "en")).classes("w-full").props("dark outlined")
+                                refs["refine_target"] = {"sel": sel}
+                            config_item("Zielsprache (Übersetzung)", build_refine_target, "Wirkt nur wenn Modus auf Übersetzung steht.")
+
+                            def build_refine_filler():
+                                t = ui.switch("Filler entfernen", value=cfg.get("REFINE_STRIP_FILLERS", False)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                                refs["refine_filler"] = {"toggle": t}
+                            config_item("Filler-Wörter entfernen", build_refine_filler, "ähm / also / halt / uh / um aus dem Output streichen.")
+
+                            def build_refine_backtrack():
+                                t = ui.switch("Self-Corrections auflösen", value=cfg.get("REFINE_BACKTRACK", False)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                                refs["refine_backtrack"] = {"toggle": t}
+                            config_item("Backtrack", build_refine_backtrack, "„Treffen Dienstag, ne Freitag\" → „Freitag\". LLM löst Self-Corrections auf.")
+
+                            def build_refine_endpoint():
+                                inp = ui.input(value=cfg.get("REFINE_ENDPOINT", "http://localhost:1234/v1/chat/completions")).classes("w-full").props("dark outlined")
+                                refs["refine_endpoint"] = {"input": inp}
+                            config_item("LM-Studio-Endpoint", build_refine_endpoint, "OpenAI-kompatible URL. Default ist LM Studio lokal auf Port 1234.")
+
+                            def build_refine_timeout():
+                                inp = ui.number(value=cfg.get("REFINE_TIMEOUT_S", 15.0), format="%.1f", min=1.0, max=120.0, step=0.5).classes("w-full").props("dark outlined")
+                                refs["refine_timeout"] = {"input": inp}
+                            config_item("Refine-Timeout (s)", build_refine_timeout, "Max. Wartezeit für den LLM-Call. Bei Timeout wird der Rohtext durchgereicht.")
 
                     # === RIGHT SIDEBAR — Custom System-Prompt ===
                     with ui.column().classes("w-72 shrink-0 gap-1 p-3 bg-zinc-900/70 border border-zinc-800/60 rounded-md self-stretch min-h-[640px]"):
@@ -518,10 +609,11 @@ async def index():
         "loading_model": ("bg-amber-500",   "Lade Modell",  "text-amber-500",   "Lade Modell",           "downloading",     True,  False, True),
         "ready":         ("bg-emerald-500", "Bereit",       "text-emerald-500", "Mikrofon deaktivieren", "stop",            False, False, False),
         "recording":     ("bg-emerald-500", "Aufnahme",     "text-emerald-500", "Mikrofon deaktivieren", "stop",            False, True,  False),
+        "refining":      ("bg-sky-500",     "Verfeinere",   "text-sky-400",     "Mikrofon deaktivieren", "stop",            False, False, True),
         "stopping":      ("bg-amber-500",   "Stoppe",       "text-amber-500",   "Wird gestoppt",         "hourglass_empty", True,  False, True),
     }
-    _ALL_DOT_COLORS = "bg-zinc-600 bg-amber-500 bg-emerald-500"
-    _ALL_LABEL_COLORS = "text-zinc-500 text-amber-500 text-emerald-500"
+    _ALL_DOT_COLORS = "bg-zinc-600 bg-amber-500 bg-emerald-500 bg-sky-500"
+    _ALL_LABEL_COLORS = "text-zinc-500 text-amber-500 text-emerald-500 text-sky-400"
 
     def update_status(*_args):
         state = process_manager.get_state()

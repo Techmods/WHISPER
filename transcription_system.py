@@ -50,7 +50,17 @@ from config import (
     TYPE_INTO_CURSOR,
     OUTPUT_FILE,
     TASK,
+    REFINE_ENABLED,
+    REFINE_ENDPOINT,
+    REFINE_MODEL,
+    REFINE_TRANSLATE,
+    REFINE_TARGET_LANGUAGE,
+    REFINE_STRIP_FILLERS,
+    REFINE_BACKTRACK,
+    REFINE_TIMEOUT_S,
 )
+
+import refine
 
 # pyautogui: kein Failsafe (Maus in Ecke wuerde sonst abbrechen)
 pyautogui.FAILSAFE = False
@@ -129,13 +139,40 @@ def apply_keyword_expansions(text: str) -> str:
     return text
 
 
+def apply_refine(text: str) -> str:
+    """
+    LLM-Refine via LM Studio. Optional, je nach REFINE_*-Settings.
+    Bei Fehler: Rohtext wird durchgereicht + Warnung in Konsole.
+    """
+    if not REFINE_ENABLED:
+        return text
+    if not (REFINE_TRANSLATE or REFINE_STRIP_FILLERS or REFINE_BACKTRACK):
+        return text
+    emit_state("refining")
+    try:
+        return refine.polish(
+            text,
+            endpoint=REFINE_ENDPOINT,
+            model=REFINE_MODEL,
+            translate=REFINE_TRANSLATE,
+            target_language=REFINE_TARGET_LANGUAGE,
+            strip_fillers=REFINE_STRIP_FILLERS,
+            backtrack=REFINE_BACKTRACK,
+            timeout=REFINE_TIMEOUT_S,
+        )
+    except refine.RefineError as e:
+        print(f"  [Refine-Warn] {e} — Output unbearbeitet.", flush=True)
+        return text
+
+
 def process_text(raw_text: str) -> str:
     """
     Vollstaendige Post-Processing-Pipeline fuer einen transkribierten Text.
 
     Reihenfolge:
-        1. Korrekturen (Tipp-/Erkennungsfehler beheben)
-        2. Keyword-Expansionen (Abkuerzungen ausschreiben)
+        1. Korrekturen (Regex auf Originalsprache)
+        2. Keyword-Expansionen (Originalsprache)
+        3. Refine via LLM (optional: Translate/Filler/Backtrack)
 
     Args:
         raw_text: Direkte Ausgabe von Whisper/RealtimeSTT.
@@ -146,6 +183,7 @@ def process_text(raw_text: str) -> str:
     text = raw_text.strip()
     text = apply_corrections(text)
     text = apply_keyword_expansions(text)
+    text = apply_refine(text)
     return text
 
 
@@ -223,8 +261,12 @@ def on_transcription_complete(text: str) -> None:
     # Partielle Anzeige loeschen
     print("\r" + " " * 90 + "\r", end="", flush=True)
 
-    # Post-Processing anwenden
+    # Post-Processing anwenden (apply_refine emittiert intern [STATE:refining])
     processed = process_text(text)
+
+    # Nach Post-Processing zurück auf "ready" — nächster Aufnahme-Start
+    # setzt dann wieder "recording".
+    emit_state("ready")
 
     if not processed:
         return
