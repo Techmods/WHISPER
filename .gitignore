@@ -2,5 +2,38 @@ venv/
 __pycache__/
 *.pyc
 *.log
+
+# Output transcripts — never commit user dictation data
 transkription.txt
+transkription_*.txt
+output.txt
+diktat*.txt
+
+# Audio / video uploads — never commit recordings
+*.m4a
+*.mp3
+*.wav
+*.mp4
+*.ogg
+*.flac
+*.webm
+*.aac
+99_archive/uploads/
+
+# Local IDE / agent config (machine-specific)
 .claude/agent-memory/
+.claude/settings.local.json
+
+# Build / brand artefacts (separate commits if needed)
+whisper_logo_pack/
+whisper_logo_pack*.zip
+
+# Local databases (Phase 1 — Stats)
+99_archive/stats.db
+*.sqlite
+*.sqlite-journal
+*.db-journal
+
+# OS noise
+.DS_Store
+Thumbs.db
