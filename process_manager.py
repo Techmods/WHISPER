@@ -28,7 +28,7 @@ _log_buffer: collections.deque = collections.deque(maxlen=500)
 _log_callbacks: list = []
 
 # Lifecycle-State des Transkriptions-Prozesses.
-# Werte: "offline" | "starting" | "loading_model" | "ready" | "recording" | "stopping"
+# Werte: "offline" | "starting" | "loading_model" | "ready" | "recording" | "refining" | "stopping"
 _state: str = "offline"
 
 # Callbacks die bei jedem State-Wechsel gefeuert werden — signatur: cb(new_state: str)

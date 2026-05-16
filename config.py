@@ -184,3 +184,23 @@ TYPE_INTO_CURSOR = True
 # Transkriptionen in Datei schreiben (append). None = deaktiviert.
 # Beispiel: OUTPUT_FILE = r"C:\DEV\WHISPER\transkription.txt"
 OUTPUT_FILE = 'C:\\DEV\\WHISPER\\transkription.txt'
+
+# ---------------------------------------------------------------------------
+# REFINE-LAYER (LLM-Post-Processing über LM Studio)
+# ---------------------------------------------------------------------------
+# Nach Whisper-Transkription + Korrekturen + Keyword-Expansionen wird der Text
+# optional durch ein lokales LLM (LM Studio, OpenAI-kompatibel) geschickt.
+# Drei Modi sind kombinierbar in einem Call:
+#   - REFINE_TRANSLATE     → in REFINE_TARGET_LANGUAGE übersetzen
+#   - REFINE_STRIP_FILLERS → ähm/also/halt/uh raus
+#   - REFINE_BACKTRACK     → Self-Corrections auflösen
+# Bei REFINE_ENABLED=False bleibt alles inaktiv (kein HTTP-Call).
+# ---------------------------------------------------------------------------
+REFINE_ENABLED = False
+REFINE_ENDPOINT = 'http://localhost:1234/v1/chat/completions'
+REFINE_MODEL = 'gemma-4-e4b-uncensored-hauhaucs-aggressive'
+REFINE_TRANSLATE = False
+REFINE_TARGET_LANGUAGE = 'en'
+REFINE_STRIP_FILLERS = False
+REFINE_BACKTRACK = False
+REFINE_TIMEOUT_S = 15.0
