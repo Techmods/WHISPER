@@ -161,7 +161,9 @@ async def index():
         try {
             micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            analyser = audioCtx.createAnalyser(); analyser.fftSize = 128; analyser.smoothingTimeConstant = 0.8;
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 256;                 // war 128 — mehr bins, feinere Auflösung
+            analyser.smoothingTimeConstant = 0.5;   // war 0.8 — reagiert direkter auf Lautstärke
             const source = audioCtx.createMediaStreamSource(micStream); source.connect(analyser);
             const canvas = document.getElementById('audio-canvas');
             if(canvas) { canvasCtx = canvas.getContext('2d'); dataArray = new Uint8Array(analyser.frequencyBinCount); isVisActive=true; drawWave(); }
@@ -181,10 +183,15 @@ async def index():
         }
     }
     function drawWave() {
-        if(!isVisActive) return;
-        animId = requestAnimationFrame(drawWave);
+        if(!isVisActive) { animId = null; return; }
         const canvas = document.getElementById('audio-canvas');
-        if(!canvas || !canvasCtx) return;
+        if(!canvas || !canvas.isConnected) {
+            // Canvas wurde vom DOM entfernt (z.B. Tab-Wechsel) — Loop pausieren,
+            // beim nächsten init wird er sauber neu gestartet.
+            isVisActive = false; animId = null; return;
+        }
+        animId = requestAnimationFrame(drawWave);
+        if(!canvasCtx) canvasCtx = canvas.getContext('2d');
         analyser.getByteFrequencyData(dataArray);
         canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
         canvasCtx.fillStyle = '#10b981';
@@ -197,9 +204,11 @@ async def index():
         let x = 0;
         for(let i = 0; i < numBars; i++) {
             const binIdx = Math.floor(i * (activeRange / numBars));
-            const barHeight = dataArray[binIdx] / 4;
+            // Normieren auf 0..1, dann auf Canvas-Höhe mit Boost-Faktor 1.4 für sichtbare Reaktion
+            const norm = dataArray[binIdx] / 255;
+            const barHeight = Math.max(3, norm * canvas.height * 1.4);
             const y = (canvas.height - barHeight) / 2;
-            canvasCtx.fillRect(x, y, barWidth, barHeight || 2);
+            canvasCtx.fillRect(x, y, barWidth, barHeight);
             x += barWidth + gap;
         }
     }
@@ -247,7 +256,6 @@ async def index():
             # wird aber nicht mehr an den Recorder durchgereicht.
             # Modus-Dropdown steuert jetzt REFINE_TRANSLATE.
             "TASK": "transcribe",
-            "REFINE_ENABLED": refs["refine_enabled"]["toggle"].value,
             "REFINE_MODEL": refs["refine_model"]["sel"].value or "",
             "REFINE_ENDPOINT": refs["refine_endpoint"]["input"].value.strip() or "http://localhost:1234/v1/chat/completions",
             "REFINE_TRANSLATE": refs["refine_translate"]["toggle"].value,
@@ -256,6 +264,21 @@ async def index():
             "REFINE_BACKTRACK": refs["refine_backtrack"]["toggle"].value,
             "REFINE_TIMEOUT_S": float(refs["refine_timeout"]["input"].value),
         }
+
+        # Master-Switch automatisch mit-aktivieren wenn irgendein Refine-Modus an ist.
+        any_refine_mode = (
+            updates["REFINE_TRANSLATE"]
+            or updates["REFINE_STRIP_FILLERS"]
+            or updates["REFINE_BACKTRACK"]
+        )
+        master_explicit = refs["refine_enabled"]["toggle"].value
+        if any_refine_mode and not master_explicit:
+            refs["refine_enabled"]["toggle"].value = True
+            ui.notify(
+                "Refine-Layer wurde mit-aktiviert, weil mindestens ein Modus eingeschaltet ist.",
+                type="info", color="sky-600",
+            )
+        updates["REFINE_ENABLED"] = master_explicit or any_refine_mode
         try:
             config_rw.write_config(updates)
         except Exception as e:
@@ -330,40 +353,45 @@ async def index():
                         with ui.element("div").classes("h-10 w-64 bg-zinc-950/80 rounded border border-zinc-800/60 flex items-center justify-center overflow-hidden"):
                             ui.html('<canvas id="audio-canvas" width="240" height="28"></canvas>')
 
-                    # Live Middle: Card Feed
+                    # Live Body: Feed links (flex-1) + System-Log rechts (w-80 sidebar)
                     card_texts = []
-                    with ui.row().classes("w-full px-6 pt-4 pb-2 justify-between items-center shrink-0"):
-                        ui.label("Diktierter Feed").classes("text-zinc-600 font-semibold tracking-widest text-[10px] uppercase")
-                        def copy_all():
-                            all_txt = "\n".join(card_texts)
-                            if all_txt:
-                                ui.run_javascript(f"copyToClipboard({repr(all_txt)});")
-                                ui.notify("Feed kopiert!", type="positive", color="emerald-600", position="bottom-right")
-                        ui.button("Alles kopieren", icon="content_copy", on_click=copy_all).classes("btn-em shadow-none").props("flat")
+                    with ui.row().classes("w-full flex-1 flex-nowrap gap-0 min-h-0"):
 
-                    feed_container = ui.scroll_area().classes("w-full flex-1 px-6 mb-2")
-                    def create_card(text):
-                        if not text.strip(): return
-                        card_texts.append(text)
-                        with feed_container:
-                            with ui.row().classes("w-full border border-zinc-800/70 bg-zinc-900/40 rounded-md p-4 mb-2 items-start justify-between hover:border-zinc-700 transition-colors"):
-                                ui.label(text).classes("text-zinc-200 text-sm flex-1 leading-relaxed")
-                                ui.button("Kopieren", icon="content_copy", on_click=lambda t=text: ui.run_javascript(f"copyToClipboard({repr(t)});")).classes("btn-em shadow-none ml-4 flex-shrink-0").props("flat")
+                        # === LINKS: Diktierter Feed ===
+                        with ui.column().classes("flex-1 min-w-0 h-full"):
+                            with ui.row().classes("w-full px-6 pt-4 pb-2 justify-between items-center shrink-0"):
+                                ui.label("Diktierter Feed").classes("text-zinc-600 font-semibold tracking-widest text-[10px] uppercase")
+                                def copy_all():
+                                    all_txt = "\n".join(card_texts)
+                                    if all_txt:
+                                        ui.run_javascript(f"copyToClipboard({repr(all_txt)});")
+                                        ui.notify("Feed kopiert!", type="positive", color="emerald-600", position="bottom-right")
+                                ui.button("Alles kopieren", icon="content_copy", on_click=copy_all).classes("btn-em shadow-none").props("flat")
 
-                    # Live Bottom: kompakter Terminal-Log, einklappbar
-                    with ui.expansion("System-Log", icon="terminal", value=False).classes(
-                        "w-full shrink-0 border-t border-zinc-900 bg-zinc-950"
-                    ).props("dense header-class='text-zinc-500 text-[10px] font-bold tracking-wider px-6 py-1'"):
-                        log_area = ui.log(max_lines=200).classes(
-                            "w-full h-28 bg-transparent text-zinc-500 font-mono text-xs px-6 py-2 border-none leading-relaxed"
-                        )
-                        def process_log(line):
-                            if line.startswith("__TRANSCRIPT__:"):
-                                create_card(line.replace("__TRANSCRIPT__:", "").strip())
-                            else:
-                                log_area.push(line)
-                        for line in process_manager.get_log_buffer(): process_log(line)
-                        process_manager.on_new_line(process_log)
+                            feed_container = ui.scroll_area().classes("w-full flex-1 px-6 pb-2")
+                            def create_card(text):
+                                if not text.strip(): return
+                                card_texts.append(text)
+                                with feed_container:
+                                    with ui.row().classes("w-full border border-zinc-800/70 bg-zinc-900/40 rounded-md p-4 mb-2 items-start justify-between hover:border-zinc-700 transition-colors"):
+                                        ui.label(text).classes("text-zinc-200 text-sm flex-1 leading-relaxed")
+                                        ui.button("Kopieren", icon="content_copy", on_click=lambda t=text: ui.run_javascript(f"copyToClipboard({repr(t)});")).classes("btn-em shadow-none ml-4 flex-shrink-0").props("flat")
+
+                        # === RECHTS: System-Log Sidebar (immer sichtbar) ===
+                        with ui.column().classes("w-80 shrink-0 h-full border-l border-zinc-900 bg-zinc-950 px-4 py-3 gap-2"):
+                            with ui.row().classes("w-full items-center justify-between shrink-0"):
+                                ui.label("System-Log").classes("text-zinc-500 text-[10px] font-bold tracking-wider uppercase")
+                                ui.icon("terminal").classes("text-zinc-700 text-sm")
+                            log_area = ui.log(max_lines=300).classes(
+                                "w-full flex-1 bg-transparent text-zinc-500 font-mono text-[11px] border-none leading-relaxed"
+                            )
+                            def process_log(line):
+                                if line.startswith("__TRANSCRIPT__:"):
+                                    create_card(line.replace("__TRANSCRIPT__:", "").strip())
+                                else:
+                                    log_area.push(line)
+                            for line in process_manager.get_log_buffer(): process_log(line)
+                            process_manager.on_new_line(process_log)
 
 
             # ======== TAB 2: DATEIVERARBEITUNG ========
@@ -558,15 +586,28 @@ async def index():
                                     ui.button(icon="refresh", on_click=reload_models).classes("btn-ghost shadow-none shrink-0").props("flat dense")
                             config_item("Refine-Modell", build_refine_model, "Modell aus LM Studio. Klick Refresh um die Liste neu zu laden.")
 
+                            def _auto_enable_master(_evt=None):
+                                # Live-Sync: wenn ein Refine-Modus eingeschaltet wird, Master mit anziehen.
+                                if "refine_enabled" not in refs:
+                                    return
+                                any_mode = (
+                                    (refs.get("refine_translate", {}).get("toggle") and refs["refine_translate"]["toggle"].value)
+                                    or (refs.get("refine_filler", {}).get("toggle") and refs["refine_filler"]["toggle"].value)
+                                    or (refs.get("refine_backtrack", {}).get("toggle") and refs["refine_backtrack"]["toggle"].value)
+                                )
+                                if any_mode and not refs["refine_enabled"]["toggle"].value:
+                                    refs["refine_enabled"]["toggle"].value = True
+                                    ui.notify("Refine-Layer wurde automatisch aktiviert.", type="info", color="sky-600")
+
                             def build_mode():
-                                # Semantisch: setzt REFINE_TRANSLATE-Toggle bei Auswahl.
                                 current = "translate" if cfg.get("REFINE_TRANSLATE", False) else "transcribe"
                                 sel = ui.select(
                                     options={"transcribe": "Transkription (Original)", "translate": "Übersetzung (siehe Zielsprache)"},
                                     value=current,
+                                    on_change=_auto_enable_master,
                                 ).classes("w-full").props("dark outlined")
                                 refs["refine_translate"] = {"toggle": _ToggleBridge(sel, "translate")}
-                            config_item("Modus", build_mode, "Originalsprache lassen oder via LLM in die unten gewählte Zielsprache übersetzen. Benötigt aktivierten Refine-Layer.")
+                            config_item("Modus", build_mode, "Originalsprache lassen oder via LLM in die unten gewählte Zielsprache übersetzen. Aktiviert den Refine-Layer automatisch.")
 
                             def build_refine_target():
                                 sel = ui.select(options=REFINE_TARGET_OPTIONS, value=cfg.get("REFINE_TARGET_LANGUAGE", "en")).classes("w-full").props("dark outlined")
@@ -574,12 +615,12 @@ async def index():
                             config_item("Zielsprache (Übersetzung)", build_refine_target, "Wirkt nur wenn Modus auf Übersetzung steht.")
 
                             def build_refine_filler():
-                                t = ui.switch("Filler entfernen", value=cfg.get("REFINE_STRIP_FILLERS", False)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                                t = ui.switch("Filler entfernen", value=cfg.get("REFINE_STRIP_FILLERS", False), on_change=_auto_enable_master).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
                                 refs["refine_filler"] = {"toggle": t}
                             config_item("Filler-Wörter entfernen", build_refine_filler, "ähm / also / halt / uh / um aus dem Output streichen.")
 
                             def build_refine_backtrack():
-                                t = ui.switch("Self-Corrections auflösen", value=cfg.get("REFINE_BACKTRACK", False)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                                t = ui.switch("Self-Corrections auflösen", value=cfg.get("REFINE_BACKTRACK", False), on_change=_auto_enable_master).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
                                 refs["refine_backtrack"] = {"toggle": t}
                             config_item("Backtrack", build_refine_backtrack, "„Treffen Dienstag, ne Freitag\" → „Freitag\". LLM löst Self-Corrections auf.")
 
