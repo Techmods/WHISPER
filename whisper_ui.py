@@ -37,9 +37,13 @@ def get_audio_devices() -> dict:
     except Exception: pass
     return devices
 
-def config_item(title: str, build_widget):
+def config_item(title: str, build_widget, tip: str = ""):
     with ui.column().classes("w-full gap-1 p-3 bg-zinc-900/70 border border-zinc-800/60 rounded-md justify-start"):
-        ui.label(title).classes("text-zinc-500 text-[10px] font-bold uppercase tracking-wider")
+        with ui.row().classes("items-center gap-1 w-full"):
+            ui.label(title).classes("text-zinc-500 text-[10px] font-bold uppercase tracking-wider flex-1")
+            if tip:
+                with ui.icon("info_outline").classes("text-zinc-600 text-xs cursor-help"):
+                    ui.tooltip(tip).classes("text-xs max-w-xs")
         with ui.element("div").classes("w-full"): build_widget()
 
 @ui.page("/")
@@ -113,19 +117,40 @@ async def index():
       .btn-cta:hover { background:#d1fae5 !important; color:#064e3b !important; }
       .btn-cta-stop { background:#1c0a0a !important; color:#fca5a5 !important; border:1px solid #7f1d1d !important; }
       .btn-cta-stop:hover { background:#450a0a !important; }
+
+      /* === Animierte Punkte für transient Status (Starte…, Lade Modell…, Stoppe…) === */
+      .status-dots::after { content:''; display:inline-block; width:1.2em; text-align:left; animation: dots 1.2s steps(4,end) infinite; }
+      @keyframes dots { 0% { content:''; } 25% { content:'.'; } 50% { content:'..'; } 75% { content:'...'; } 100% { content:''; } }
+      /* Recording-Pulse */
+      .dot-pulse { animation: pulse 1.6s ease-in-out infinite; }
+      @keyframes pulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.55; transform:scale(1.25); } }
     </style>
     <script>
     let audioCtx; let analyser; let dataArray; let canvasCtx; let animId; let isVisActive = false;
+    let micStream = null;
     async function initAudioVisualizer() {
         if(isVisActive) return;
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             analyser = audioCtx.createAnalyser(); analyser.fftSize = 128; analyser.smoothingTimeConstant = 0.8;
-            const source = audioCtx.createMediaStreamSource(stream); source.connect(analyser);
+            const source = audioCtx.createMediaStreamSource(micStream); source.connect(analyser);
             const canvas = document.getElementById('audio-canvas');
             if(canvas) { canvasCtx = canvas.getContext('2d'); dataArray = new Uint8Array(analyser.frequencyBinCount); isVisActive=true; drawWave(); }
         } catch(err) { console.warn('Mic access visualization denied by user.'); }
+    }
+    function stopAudioVisualizer() {
+        isVisActive = false;
+        if(animId) { cancelAnimationFrame(animId); animId = null; }
+        try { if(micStream) { micStream.getTracks().forEach(t => t.stop()); } } catch(e) {}
+        micStream = null;
+        try { if(audioCtx) { audioCtx.close(); } } catch(e) {}
+        audioCtx = null; analyser = null; dataArray = null;
+        const canvas = document.getElementById('audio-canvas');
+        if(canvas && canvas.getContext) {
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
     }
     function drawWave() {
         if(!isVisActive) return;
@@ -135,12 +160,12 @@ async def index():
         analyser.getByteFrequencyData(dataArray);
         canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
         canvasCtx.fillStyle = '#10b981';
-        
+
         const numBars = 32;
-        const gap = 2; 
+        const gap = 2;
         const barWidth = (canvas.width - gap * numBars) / numBars;
-        const activeRange = Math.floor(dataArray.length * 0.6); 
-        
+        const activeRange = Math.floor(dataArray.length * 0.6);
+
         let x = 0;
         for(let i = 0; i < numBars; i++) {
             const binIdx = Math.floor(i * (activeRange / numBars));
@@ -166,7 +191,7 @@ async def index():
     </script>
     """)
 
-    def save_config():
+    async def save_config():
         device_val = refs.get("input_device", {}).get("sel")
         device_index = None
         if device_val and device_val.value and device_val.value != "none":
@@ -190,21 +215,32 @@ async def index():
             "PRE_RECORDING_BUFFER_DURATION": round(refs["pre_buf"]["slider"].value, 1),
             "POST_SPEECH_SILENCE_DURATION": round(refs["post_silence"]["slider"].value, 1),
             "TYPE_INTO_CURSOR": refs["cursor"]["toggle"].value,
+            "TASK": refs["task"]["sel"].value,
         }
         try:
             config_rw.write_config(updates)
-            ui.notify("Einstellungen gespeichert.", type="positive", color="emerald-600")
-            refs["restart_btn"].classes(remove="text-zinc-600", add="text-amber-500 hover:text-amber-400 bg-amber-900/20")
         except Exception as e:
             ui.notify(f"Fehler: {e}", type="negative", color="red-600")
+            return
+
+        if process_manager.is_running():
+            ui.notify("Einstellungen gespeichert – Transcriber wird neu gestartet…", type="info", color="sky-600")
+            await trigger_restart()
+        else:
+            ui.notify("Einstellungen gespeichert.", type="positive", color="emerald-600")
 
     async def trigger_restart():
         ui.notify("Startet Transcriber Prozessbaum neu...", type="info", color="sky-600")
         was_running = process_manager.is_running()
-        if was_running: await process_manager.stop_transcription()
-        await asyncio.sleep(0.5)
-        if was_running: await process_manager.start_transcription()
-        refs["restart_btn"].classes(remove="text-amber-500 hover:text-amber-400 bg-amber-900/20", add="text-zinc-600 hover:text-zinc-300")
+        if was_running:
+            await process_manager.stop_transcription()
+            # Auf sauberes Prozess-Ende polleN statt fixed sleep.
+            for _ in range(60):  # max 3 s
+                if not process_manager.is_running():
+                    break
+                await asyncio.sleep(0.05)
+        if was_running:
+            await process_manager.start_transcription()
         update_status()
 
     # --- MAIN LAYOUT (Single Column) ---
@@ -237,8 +273,10 @@ async def index():
                     with ui.row().classes("w-full py-4 px-6 items-center justify-center shrink-0 border-b border-zinc-900/70 relative"):
                         with ui.row().classes("absolute left-6 items-center gap-3"):
                             async def toggle():
-                                if process_manager.is_running(): await process_manager.stop_transcription()
-                                else: 
+                                if process_manager.is_running():
+                                    ui.run_javascript("stopAudioVisualizer();")
+                                    await process_manager.stop_transcription()
+                                else:
                                     await process_manager.start_transcription()
                                     ui.run_javascript("initAudioVisualizer();")
                                 update_status()
@@ -273,14 +311,17 @@ async def index():
                                 ui.label(text).classes("text-zinc-200 text-sm flex-1 leading-relaxed")
                                 ui.button("Kopieren", icon="content_copy", on_click=lambda t=text: ui.run_javascript(f"copyToClipboard({repr(t)});")).classes("btn-em shadow-none ml-4 flex-shrink-0").props("flat")
 
-                    # Live Bottom: Tall Terminal
-                    with ui.column().classes("w-full h-64 border-t border-zinc-900 bg-zinc-950 p-4 shrink-0 rounded-t-xl mx-4"):
-                        ui.label("SYSTEM-LOG").classes("text-zinc-600 text-[10px] font-bold tracking-wider mb-2")
-                        log_area = ui.log(max_lines=300).classes("w-full flex-1 bg-transparent text-zinc-500 font-mono text-xs p-0 border-none leading-relaxed")
+                    # Live Bottom: kompakter Terminal-Log, einklappbar
+                    with ui.expansion("System-Log", icon="terminal", value=False).classes(
+                        "w-full shrink-0 border-t border-zinc-900 bg-zinc-950"
+                    ).props("dense header-class='text-zinc-500 text-[10px] font-bold tracking-wider px-6 py-1'"):
+                        log_area = ui.log(max_lines=200).classes(
+                            "w-full h-28 bg-transparent text-zinc-500 font-mono text-xs px-6 py-2 border-none leading-relaxed"
+                        )
                         def process_log(line):
                             if line.startswith("__TRANSCRIPT__:"):
                                 create_card(line.replace("__TRANSCRIPT__:", "").strip())
-                            else: 
+                            else:
                                 log_area.push(line)
                         for line in process_manager.get_log_buffer(): process_log(line)
                         process_manager.on_new_line(process_log)
@@ -368,111 +409,160 @@ async def index():
 
 
             with ui.tab_panel(tab_sys).classes("w-full h-full overflow-y-auto"):
-                with ui.column().classes("w-full max-w-5xl mx-auto px-6 py-6 gap-4"):
-                    ui.label("Einstellungen & Engine Parameter").classes("text-lg font-semibold tracking-tight text-zinc-100 mb-2")
-                    
-                    # Tight 3-column grid
-                    with ui.element("div").classes("grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 w-full"):
-                        def build_model():
-                            sel = ui.select(options=MODEL_OPTIONS, value=cfg.get("MODEL_SIZE", "large-v3")).classes("w-full").props("dark outlined")
-                            refs["model"] = {"sel": sel}
-                        config_item("Model Auswahl", build_model)
+                with ui.row().classes("w-full max-w-[1600px] mx-auto px-6 py-6 gap-4 items-stretch flex-nowrap"):
 
-                        def buildStyle():
-                            sel = ui.select(options=STYLE_OPTIONS, value=cfg.get("TRANSCRIPTION_STYLE_PRESET", "standard")).classes("w-full").props("dark outlined")
-                            refs["style"] = {"sel": sel}
-                        config_item("KI-Stil & Formulierung", buildStyle)
+                    # === LEFT SIDEBAR — Fachbegriffe ===
+                    with ui.column().classes("w-72 shrink-0 gap-1 p-3 bg-zinc-900/70 border border-zinc-800/60 rounded-md self-stretch min-h-[640px]"):
+                        ui.label("Eigene Fachbegriffe (Vokabular)").classes("text-zinc-500 text-[10px] font-bold uppercase tracking-wider")
+                        ui.label("Komma-getrennt. Hilft Whisper, Namen und Fachwörter korrekt zu erkennen.").classes("text-zinc-600 text-[10px] leading-snug mb-1")
+                        vocab_str = ", ".join(cfg.get("CUSTOM_VOCABULARY", []))
+                        vocab_area = ui.textarea(placeholder="Begriff1, Begriff2, ...", value=vocab_str).classes("w-full flex-1").props("dark outlined input-class='resize-none h-full' input-style='min-height:100%'")
+                        refs["vocab"] = {"area": vocab_area}
 
-                        def build_sil():
-                            sl = ui.slider(min=1.0, max=5.0, step=0.1, value=cfg.get("POST_SPEECH_SILENCE_DURATION", 3.0)).props("color=emerald-500 dark snap label")
-                            refs["post_silence"] = {"slider": sl}
-                        config_item("Satz-Cutoff / Denkpause (s)", build_sil)
+                    # === CENTER — Einstellungen Grid ===
+                    with ui.column().classes("flex-1 min-w-0 gap-4"):
+                        ui.label("Einstellungen & Engine Parameter").classes("text-lg font-semibold tracking-tight text-zinc-100 mb-2")
+                        with ui.element("div").classes("grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 w-full"):
+                            def build_model():
+                                sel = ui.select(options=MODEL_OPTIONS, value=cfg.get("MODEL_SIZE", "large-v3")).classes("w-full").props("dark outlined")
+                                refs["model"] = {"sel": sel}
+                            config_item("Model Auswahl", build_model, "Whisper-Modell. Größere Modelle = bessere Qualität, mehr VRAM, langsamere Verarbeitung.")
 
-                        def build_vad():
-                            t = ui.switch("Enable Silero VAD", value=cfg.get("VAD_ENABLED", True)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
-                            refs["vad"] = {"toggle": t}
-                        config_item("Voice Activity Detection", build_vad)
+                            def buildStyle():
+                                sel = ui.select(options=STYLE_OPTIONS, value=cfg.get("TRANSCRIPTION_STYLE_PRESET", "standard")).classes("w-full").props("dark outlined")
+                                refs["style"] = {"sel": sel}
+                            config_item("KI-Stil & Formulierung", buildStyle, "Standard: mit Satzzeichen. Code: technische Begriffe. Roh: unveränderte Whisper-Ausgabe ohne Formatierung.")
 
-                        def build_beam():
-                            sel = ui.select(options=[1,3,5,10], value=cfg.get("BEAM_SIZE", 5)).classes("w-full").props("dark outlined")
-                            refs["beam"] = {"sel": sel}
-                        config_item("Beam Size (Präzision)", build_beam)
+                            def build_sil():
+                                sl = ui.slider(min=1.0, max=5.0, step=0.1, value=cfg.get("POST_SPEECH_SILENCE_DURATION", 3.0)).props("color=emerald-500 dark snap label")
+                                refs["post_silence"] = {"slider": sl}
+                            config_item("Satz-Cutoff / Denkpause (s)", build_sil, "Stille nach einem Satz, bevor transkribiert wird. Niedrig = schneller, Hoch = vollständigere Sätze.")
 
-                        def build_lang():
-                            sel = ui.select(options=LANGUAGE_OPTIONS, value=cfg.get("LANGUAGE", "de")).classes("w-full").props("dark outlined")
-                            refs["lang"] = {"sel": sel}
-                        config_item("Erzwungene Sprache", build_lang)
+                            def build_vad():
+                                t = ui.switch("Enable Silero VAD", value=cfg.get("VAD_ENABLED", True)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                                refs["vad"] = {"toggle": t}
+                            config_item("Voice Activity Detection", build_vad, "Erkennt automatisch Sprache im Audiosignal. Empfohlen: aktiviert. Nur bei Problemen deaktivieren.")
 
-                        def build_device():
-                            sel = ui.select(options=DEVICE_OPTIONS, value=cfg.get("DEVICE", "cuda")).classes("w-full").props("dark outlined")
-                            refs["device"] = {"sel": sel}
-                        config_item("Hardware Device", build_device)
+                            def build_beam():
+                                sel = ui.select(options=[1,3,5,10], value=cfg.get("BEAM_SIZE", 5)).classes("w-full").props("dark outlined")
+                                refs["beam"] = {"sel": sel}
+                            config_item("Beam Size (Präzision)", build_beam, "Höher = genauere Transkription, aber langsamer. 1 = schnellste Echtzeit, 5 = Kompromiss, 10 = max. Qualität.")
 
-                        def build_compute():
-                            sel = ui.select(options=COMPUTE_OPTIONS, value=cfg.get("COMPUTE_TYPE", "float16")).classes("w-full").props("dark outlined")
-                            refs["compute"] = {"sel": sel}
-                        config_item("Compute Datentyp", build_compute)
+                            def build_lang():
+                                sel = ui.select(options=LANGUAGE_OPTIONS, value=cfg.get("LANGUAGE", "de")).classes("w-full").props("dark outlined")
+                                refs["lang"] = {"sel": sel}
+                            config_item("Erzwungene Sprache", build_lang, "Sprache der Audioeingabe. 'Automatisch' erkennt die Sprache, ist aber etwas langsamer.")
 
-                        def build_gpu():
-                            inp = ui.number(value=cfg.get("GPU_DEVICE_INDEX", 0), format="%.0f", min=0).classes("w-full").props("dark outlined")
-                            refs["gpu_idx"] = {"input": inp}
-                        config_item("GPU Index-ID", build_gpu)
+                            def build_device():
+                                sel = ui.select(options=DEVICE_OPTIONS, value=cfg.get("DEVICE", "cuda")).classes("w-full").props("dark outlined")
+                                refs["device"] = {"sel": sel}
+                            config_item("Hardware Device", build_device, "GPU (CUDA) ist deutlich schneller. CPU funktioniert ohne Grafikkarte – dann Modell 'small' oder 'medium' empfohlen.")
 
-                        def build_mic():
-                            cur = str(cfg.get("INPUT_DEVICE_INDEX")) if cfg.get("INPUT_DEVICE_INDEX") is not None else "none"
-                            sel = ui.select(options=audio_devices, value=cur if cur in audio_devices else "none").classes("w-full").props("dark outlined")
-                            refs["input_device"] = {"sel": sel}
-                        config_item("Input Mikrofon", build_mic)
-                        
-                        def build_silero():
-                            sl = ui.slider(min=0.0, max=1.0, step=0.05, value=cfg.get("SILERO_SENSITIVITY", 0.4)).props("color=emerald-500 dark snap label")
-                            refs["silero"] = {"slider": sl}
-                        config_item("VAD Sensibilität", build_silero)
-                        
-                        def build_min():
-                            sl = ui.slider(min=0.1, max=3.0, step=0.1, value=cfg.get("MIN_LENGTH_OF_RECORDING", 0.5)).props("color=emerald-500 dark snap label")
-                            refs["min_len"] = {"slider": sl}
-                        config_item("Min. Audio-Länge (s)", build_min)
+                            def build_compute():
+                                sel = ui.select(options=COMPUTE_OPTIONS, value=cfg.get("COMPUTE_TYPE", "float16")).classes("w-full").props("dark outlined")
+                                refs["compute"] = {"sel": sel}
+                            config_item("Compute Datentyp", build_compute, "float16: Standard für NVIDIA GPU. bfloat16: Alternative für RTX 5000er (Blackwell). CPU: int8 empfohlen.")
 
-                        def build_pre_buf():
-                            sl = ui.slider(min=0.0, max=5.0, step=0.1, value=cfg.get("PRE_RECORDING_BUFFER_DURATION", 1.0)).props("color=emerald-500 dark snap label")
-                            refs["pre_buf"] = {"slider": sl}
-                        config_item("Vorlauf-Puffer (s)", build_pre_buf)
+                            def build_gpu():
+                                inp = ui.number(value=cfg.get("GPU_DEVICE_INDEX", 0), format="%.0f", min=0).classes("w-full").props("dark outlined")
+                                refs["gpu_idx"] = {"input": inp}
+                            config_item("GPU Index-ID", build_gpu, "Bei mehreren Grafikkarten: Index der gewünschten GPU. Standard = 0 (erste GPU).")
 
-                        def build_cursor():
-                            t = ui.switch("Text direkt tippen", value=cfg.get("TYPE_INTO_CURSOR", False)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
-                            refs["cursor"] = {"toggle": t}
-                        config_item("Input Simulation", build_cursor)
+                            def build_mic():
+                                cur = str(cfg.get("INPUT_DEVICE_INDEX")) if cfg.get("INPUT_DEVICE_INDEX") is not None else "none"
+                                sel = ui.select(options=audio_devices, value=cur if cur in audio_devices else "none").classes("w-full").props("dark outlined")
+                                refs["input_device"] = {"sel": sel}
+                            config_item("Input Mikrofon", build_mic, "Mikrofon für die Aufnahme. 'System-Standard' übernimmt das in Windows eingestellte Gerät.")
 
-                    with ui.row().classes("w-full mt-4 gap-4"):
-                        with ui.column().classes("flex-1 gap-1 p-3 bg-zinc-900/70 border border-zinc-800/60 rounded-md"):
-                            ui.label("Eigene Fachbegriffe (Vokabular)").classes("text-zinc-500 text-[10px] font-bold uppercase tracking-wider")
-                            vocab_str = ", ".join(cfg.get("CUSTOM_VOCABULARY", []))
-                            area = ui.textarea(placeholder="Begriff1, Begriff2, ...", value=vocab_str).classes("w-full").props("dark outlined rows=3")
-                            refs["vocab"] = {"area": area}
+                            def build_silero():
+                                sl = ui.slider(min=0.0, max=1.0, step=0.05, value=cfg.get("SILERO_SENSITIVITY", 0.4)).props("color=emerald-500 dark snap label")
+                                refs["silero"] = {"slider": sl}
+                            config_item("VAD Sensibilität", build_silero, "Empfindlichkeit der Spracherkennung. Hoch = reagiert auf leise Geräusche, Niedrig = nur deutliche Sprache.")
 
-                        with ui.column().classes("flex-1 gap-1 p-3 bg-zinc-900/70 border border-zinc-800/60 rounded-md"):
-                            ui.label("Custom System-Prompt").classes("text-zinc-500 text-[10px] font-bold uppercase tracking-wider")
-                            area = ui.textarea(placeholder="Anweisungen zur Formatierung...", value=cfg.get("INITIAL_PROMPT_EXTRA", "")).classes("w-full").props("dark outlined rows=3")
-                            refs["prompt"] = {"area": area}
+                            def build_min():
+                                sl = ui.slider(min=0.1, max=3.0, step=0.1, value=cfg.get("MIN_LENGTH_OF_RECORDING", 0.5)).props("color=emerald-500 dark snap label")
+                                refs["min_len"] = {"slider": sl}
+                            config_item("Min. Audio-Länge (s)", build_min, "Mindestlänge einer Aufnahme. Zu kurze Segmente werden ignoriert, um Fehltranskriptionen zu vermeiden.")
+
+                            def build_pre_buf():
+                                sl = ui.slider(min=0.0, max=5.0, step=0.1, value=cfg.get("PRE_RECORDING_BUFFER_DURATION", 1.0)).props("color=emerald-500 dark snap label")
+                                refs["pre_buf"] = {"slider": sl}
+                            config_item("Vorlauf-Puffer (s)", build_pre_buf, "Audio-Puffer vor Sprachbeginn. Stellt sicher, dass der Satzanfang nicht abgeschnitten wird.")
+
+                            def build_cursor():
+                                t = ui.switch("Text direkt tippen", value=cfg.get("TYPE_INTO_CURSOR", False)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                                refs["cursor"] = {"toggle": t}
+                            config_item("Input Simulation", build_cursor, "Schreibt transkribierten Text direkt an die Cursor-Position (via Zwischenablage). Vorher Fokus auf Zielfenster setzen.")
+
+                            def build_task():
+                                sel = ui.select(
+                                    options={"transcribe": "Transkription (Original)", "translate": "Übersetzung → Englisch"},
+                                    value=cfg.get("TASK", "transcribe")
+                                ).classes("w-full").props("dark outlined")
+                                refs["task"] = {"sel": sel}
+                            config_item("Modus", build_task, "Transkription: Text in Originalsprache. Übersetzung: Audio beliebiger Sprache wird direkt ins Englische übersetzt.")
+
+                    # === RIGHT SIDEBAR — Custom System-Prompt ===
+                    with ui.column().classes("w-72 shrink-0 gap-1 p-3 bg-zinc-900/70 border border-zinc-800/60 rounded-md self-stretch min-h-[640px]"):
+                        ui.label("Custom System-Prompt").classes("text-zinc-500 text-[10px] font-bold uppercase tracking-wider")
+                        ui.label("Freier Text als initial_prompt für Whisper. Steuert Stil, Tonalität oder Formatierungs-Hinweise.").classes("text-zinc-600 text-[10px] leading-snug mb-1")
+                        prompt_area = ui.textarea(placeholder="Anweisungen zur Formatierung...", value=cfg.get("INITIAL_PROMPT_EXTRA", "")).classes("w-full flex-1").props("dark outlined input-class='resize-none h-full' input-style='min-height:100%'")
+                        refs["prompt"] = {"area": prompt_area}
 
 
-    def update_status():
-        r = process_manager.is_running()
-        if r:
-            status_dot.classes(remove="bg-zinc-600", add="bg-emerald-500")
-            status_label.set_text("Active")
-            status_label.classes(remove="text-zinc-500", add="text-emerald-500")
-            refs["main_btn"].set_text("Mikrofon deaktivieren")
-            refs["main_btn"].props(remove="icon=mic", add="icon=stop")
-            refs["main_btn"].classes(remove="btn-cta", add="btn-cta btn-cta-stop")
+    # State → (dot-Farbe, label-Basis-Text, label-Farbe, button-Text, button-Icon,
+    #           button-disabled, recording-pulse, animierte-Punkte am Label)
+    _STATE_VIEW = {
+        "offline":       ("bg-zinc-600",    "Offline",      "text-zinc-500",    "Mikrofon aktivieren",   "mic",             False, False, False),
+        "starting":      ("bg-amber-500",   "Starte",       "text-amber-500",   "Wird gestartet",        "hourglass_empty", True,  False, True),
+        "loading_model": ("bg-amber-500",   "Lade Modell",  "text-amber-500",   "Lade Modell",           "downloading",     True,  False, True),
+        "ready":         ("bg-emerald-500", "Bereit",       "text-emerald-500", "Mikrofon deaktivieren", "stop",            False, False, False),
+        "recording":     ("bg-emerald-500", "Aufnahme",     "text-emerald-500", "Mikrofon deaktivieren", "stop",            False, True,  False),
+        "stopping":      ("bg-amber-500",   "Stoppe",       "text-amber-500",   "Wird gestoppt",         "hourglass_empty", True,  False, True),
+    }
+    _ALL_DOT_COLORS = "bg-zinc-600 bg-amber-500 bg-emerald-500"
+    _ALL_LABEL_COLORS = "text-zinc-500 text-amber-500 text-emerald-500"
+
+    def update_status(*_args):
+        state = process_manager.get_state()
+        # Wenn Prozess weg, aber State noch nicht reset (defensiv):
+        if not process_manager.is_running() and state not in ("offline", "stopping"):
+            state = "offline"
+        view = _STATE_VIEW.get(state, _STATE_VIEW["offline"])
+        dot_color, lbl_text, lbl_color, btn_text, btn_icon, btn_disabled, dot_pulse, dots_anim = view
+
+        status_dot.classes(remove=_ALL_DOT_COLORS, add=dot_color)
+        if dot_pulse:
+            status_dot.classes(add="dot-pulse")
         else:
-            status_dot.classes(remove="bg-emerald-500", add="bg-zinc-600")
-            status_label.set_text("Offline")
-            status_label.classes(remove="text-emerald-500", add="text-zinc-500")
-            refs["main_btn"].set_text("Mikrofon aktivieren")
-            refs["main_btn"].props(remove="icon=stop", add="icon=mic")
-            refs["main_btn"].classes(remove="btn-cta btn-cta-stop", add="btn-cta")
+            status_dot.classes(remove="dot-pulse")
+
+        status_label.set_text(lbl_text)
+        status_label.classes(remove=_ALL_LABEL_COLORS, add=lbl_color)
+        if dots_anim:
+            status_label.classes(add="status-dots")
+        else:
+            status_label.classes(remove="status-dots")
+
+        main_btn = refs["main_btn"]
+        main_btn.set_text(btn_text)
+        main_btn.props(remove="icon=mic icon=stop icon=hourglass_empty icon=downloading", add=f"icon={btn_icon}")
+        if state in ("ready", "recording"):
+            main_btn.classes(remove="btn-cta", add="btn-cta btn-cta-stop")
+        else:
+            main_btn.classes(remove="btn-cta-stop", add="btn-cta")
+        main_btn.set_enabled(not btn_disabled)
+
+        # Beim Wechsel auf offline auch den Browser-Mic-Stream sauber stoppen.
+        if state == "offline":
+            try:
+                ui.run_javascript("stopAudioVisualizer();")
+            except Exception:
+                pass
+
+    # State-Wechsel aus dem Subprozess (z. B. loading_model → ready) sofort
+    # in die UI bringen.
+    process_manager.on_state_change(lambda _new: update_status())
 
     update_status()
 

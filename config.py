@@ -48,7 +48,10 @@ GPU_DEVICE_INDEX = 0
 LANGUAGE = 'de'
 
 # Beam-Größe für die Dekodierung (höher = genauer, aber langsamer)
-BEAM_SIZE = 5
+BEAM_SIZE = 1
+
+# Aufgabe: "transcribe" (Originalsprache) oder "translate" (→ Englisch)
+TASK = 'translate'
 
 # ---------------------------------------------------------------------------
 # CUSTOM VOCABULARY
@@ -75,6 +78,9 @@ CUSTOM_VOCABULARY = [
     'faster whisper',
     'claude',
     'claude code',
+    'FireCrawl',
+    'OpenCode',
+    'Hermes Agent',
 ]
 
 # ---------------------------------------------------------------------------
@@ -131,7 +137,6 @@ TRANSCRIPTION_STYLE_PRESET = 'standard'
 # Fachbegriffe aus CUSTOM_VOCABULARY werden automatisch angehängt.
 # Leer lassen für automatischen Prompt aus CUSTOM_VOCABULARY.
 INITIAL_PROMPT_EXTRA = 'Dies ist eine technische Diskussion in deutscher Sprache. Bitte achte auf korrekte Groß- und Kleinschreibung, Satzzeichen (Punkte, Kommas, Fragezeichen) und setze nach jedem vollständigen Gedanken einen Absatz.'
-
 # ---------------------------------------------------------------------------
 # AUDIO-PARAMETER (RealtimeSTT)
 # ---------------------------------------------------------------------------
@@ -144,16 +149,16 @@ INPUT_DEVICE_INDEX = None
 VAD_ENABLED = True
 
 # Zeit nach Sprach-Ende, bevor der Satz abgeschnitten wird ("Denkpausen-Dauer" in Sek)
-POST_SPEECH_SILENCE_DURATION = 4
+POST_SPEECH_SILENCE_DURATION = 2
 
 # Stille-Schwelle nach der eine Aufnahme als abgeschlossen gilt (Sekunden)
-SILERO_SENSITIVITY = 0.4
+SILERO_SENSITIVITY = 0.5
 
 # Minimale Aufnahmedauer damit eine Transkription ausgelöst wird (Sekunden)
 MIN_LENGTH_OF_RECORDING = 0.5
 
 # Pre-Recording-Puffer: wie viel Audio vor Sprachbeginn erhalten bleibt (Sekunden)
-PRE_RECORDING_BUFFER_DURATION = 0.5
+PRE_RECORDING_BUFFER_DURATION = 1
 
 # Wake-Word-Erkennung deaktivieren (keine Aktivierungsvokabel benötigt)
 WAKE_WORDS_SENSITIVITY = 0.0
