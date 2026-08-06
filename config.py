@@ -184,3 +184,41 @@ TYPE_INTO_CURSOR = True
 # Transkriptionen in Datei schreiben (append). None = deaktiviert.
 # Beispiel: OUTPUT_FILE = r"C:\DEV\WHISPER\transkription.txt"
 OUTPUT_FILE = 'C:\\DEV\\WHISPER\\transkription.txt'
+
+# ---------------------------------------------------------------------------
+# VOICE-TO-VOICE PIPELINE (LLM + TTS)
+# ---------------------------------------------------------------------------
+
+# Voice-to-Voice Pipeline aktivieren (STT → LLM → TTS)
+# True = aktiv, False = deaktiviert (nur reine STT-Transkription)
+VOICE_PIPELINE_ENABLED = False
+
+# --- OpenRouter / LLM ---
+# API-Key für OpenRouter (https://openrouter.ai)
+OPENROUTER_API_KEY = ''
+
+# Modell-ID auf OpenRouter, z.B. "openai/gpt-4o-mini" oder "mistralai/mistral-7b-instruct"
+OPENROUTER_MODEL = 'openai/gpt-4o-mini'
+
+# System-Prompt für den LLM-Dialog
+LLM_SYSTEM_PROMPT = 'Du bist ein hilfreicher, präziser Assistent. Antworte immer auf Deutsch, klar und prägnant.'
+
+# --- Qwen TTS ---
+# TTS aktivieren (Text-to-Speech via lokalem Qwen-TTS-Modell auf GPU)
+TTS_ENABLED = False
+
+# Qwen-TTS Modell-Pfad oder Hugging Face Model-ID
+# Beispiel: "Qwen/Qwen2.5-Coder-0.5B" oder lokaler Pfad
+TTS_MODEL = 'Qwen/Qwen2-Audio-7B-Instruct'
+
+# Sprecherstimme / Voice-Preset (modellabhängig)
+TTS_VOICE = 'default'
+
+# Audio-Ausgabegerät-Index (None = System-Standard)
+TTS_OUTPUT_DEVICE_INDEX = None
+
+# Lautstärke der TTS-Ausgabe (0.0–1.0)
+TTS_VOLUME = 0.9
+
+# Barge-In: Laufende TTS-Ausgabe sofort unterbrechen wenn neue Spracheingabe erkannt wird
+TTS_BARGE_IN_ENABLED = True

@@ -10,6 +10,7 @@ from nicegui import ui, app
 import sounddevice as sd
 import config_rw
 import process_manager
+import voice_pipeline
 
 PROJECT_DIR = Path(__file__).parent
 VENV_PYTHON = PROJECT_DIR / "venv" / "Scripts" / "python.exe"
@@ -261,6 +262,7 @@ async def index():
             tab_live = ui.tab('Live-Transkription', icon='mic')
             tab_batch = ui.tab('Dateiverarbeitung', icon='folder')
             tab_sys = ui.tab('Systemkonfiguration', icon='settings')
+            tab_voice = ui.tab('Voice-to-Voice', icon='record_voice_over')
 
         # 3. TAB PANELS (Full Size)
         with ui.tab_panels(global_tabs, value=tab_live).classes("w-full flex-1 bg-[#050505] p-0"):
@@ -510,6 +512,160 @@ async def index():
                         refs["prompt"] = {"area": prompt_area}
 
 
+            # ======== TAB 4: VOICE-TO-VOICE PIPELINE ========
+            with ui.tab_panel(tab_voice).classes("w-full h-full overflow-y-auto"):
+                with ui.column().classes("w-full max-w-5xl mx-auto px-6 py-6 gap-6"):
+
+                    # --- Header + Pipeline-Toggle ---
+                    with ui.row().classes("w-full items-center justify-between"):
+                        with ui.column().classes("gap-1"):
+                            ui.label("Voice-to-Voice Pipeline").classes("text-lg font-semibold tracking-tight text-zinc-100")
+                            ui.label("STT → LLM (OpenRouter) → Qwen TTS (GPU) — End-to-End Sprachdialog").classes("text-zinc-500 text-xs")
+
+                        vp_state_dot = ui.element("div").classes("w-2.5 h-2.5 rounded-full bg-zinc-600 mr-2")
+                        vp_state_label = ui.label("Offline").classes("text-zinc-500 text-xs font-semibold uppercase tracking-widest mr-4")
+
+                        async def toggle_pipeline():
+                            if voice_pipeline.is_pipeline_running():
+                                await voice_pipeline.stop_pipeline()
+                            else:
+                                vp_cfg = config_rw.read_config()
+                                await voice_pipeline.start_pipeline(
+                                    openrouter_api_key=vp_cfg.get("OPENROUTER_API_KEY", ""),
+                                    openrouter_model=vp_cfg.get("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+                                    llm_system_prompt=vp_cfg.get("LLM_SYSTEM_PROMPT", ""),
+                                    tts_enabled=vp_cfg.get("TTS_ENABLED", False),
+                                    tts_model=vp_cfg.get("TTS_MODEL", "Qwen/Qwen2-Audio-7B-Instruct"),
+                                    tts_voice=vp_cfg.get("TTS_VOICE", "default"),
+                                    tts_output_device_index=vp_cfg.get("TTS_OUTPUT_DEVICE_INDEX"),
+                                    tts_volume=vp_cfg.get("TTS_VOLUME", 0.9),
+                                    tts_barge_in_enabled=vp_cfg.get("TTS_BARGE_IN_ENABLED", True),
+                                )
+                            update_vp_status()
+
+                        vp_toggle_btn = ui.button("Pipeline starten", icon="play_arrow", on_click=toggle_pipeline).classes("btn-cta shadow-none")
+                        refs["vp_toggle_btn"] = vp_toggle_btn
+
+                    ui.separator().classes("border-zinc-800")
+
+                    # --- Conversation Feed ---
+                    with ui.row().classes("w-full justify-between items-center"):
+                        ui.label("Konversation").classes("text-[10px] font-bold text-zinc-600 uppercase tracking-wider")
+                        def clear_convo():
+                            convo_col.clear()
+                            ui.notify("Konversation geleert.", type="positive", color="emerald-600", position="bottom-right")
+                        ui.button("Leeren", icon="delete_sweep", on_click=clear_convo).classes("btn-ghost shadow-none").props("flat")
+
+                    convo_col = ui.scroll_area().classes("w-full h-64 border border-zinc-800/70 rounded-md bg-zinc-950/60")
+
+                    def add_convo_message(role: str, text: str):
+                        is_user = role == "user"
+                        align = "items-end" if is_user else "items-start"
+                        bubble_cls = (
+                            "bg-emerald-950/60 border-emerald-900/50 text-emerald-100"
+                            if is_user else
+                            "bg-zinc-900/60 border-zinc-800/50 text-zinc-200"
+                        )
+                        label_text = "Du" if is_user else "KI"
+                        label_cls = "text-emerald-500" if is_user else "text-zinc-500"
+                        with convo_col:
+                            with ui.column().classes(f"w-full px-4 py-2 {align}"):
+                                ui.label(label_text).classes(f"text-[9px] font-bold uppercase tracking-widest {label_cls} mb-0.5")
+                                with ui.row().classes(f"max-w-xl border rounded-md px-3 py-2 {bubble_cls}"):
+                                    ui.label(text).classes("text-sm leading-relaxed")
+
+                    # Pipeline-Transcript-Callback registrieren
+                    voice_pipeline.on_transcript(lambda role, text: add_convo_message(role, text))
+
+                    # Pipeline-Log
+                    with ui.expansion("Pipeline-Log", icon="terminal", value=False).classes(
+                        "w-full shrink-0 border border-zinc-800/60 rounded-md bg-zinc-950"
+                    ).props("dense header-class='text-zinc-500 text-[10px] font-bold tracking-wider px-4 py-1'"):
+                        vp_log = ui.log(max_lines=100).classes(
+                            "w-full h-32 bg-transparent text-zinc-500 font-mono text-xs px-4 py-2 border-none leading-relaxed"
+                        )
+                        voice_pipeline.on_log(lambda line: vp_log.push(line))
+
+                    ui.separator().classes("border-zinc-800")
+
+                    # --- Konfiguration ---
+                    ui.label("Pipeline-Konfiguration").classes("text-[10px] font-bold text-zinc-600 uppercase tracking-wider")
+
+                    with ui.element("div").classes("grid grid-cols-1 md:grid-cols-2 gap-3 w-full"):
+
+                        def build_vp_enabled():
+                            t = ui.switch("Voice-to-Voice aktivieren", value=cfg.get("VOICE_PIPELINE_ENABLED", False)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                            refs["vp_enabled"] = {"toggle": t}
+                        config_item("Pipeline aktiv", build_vp_enabled, "Aktiviert die automatische LLM-Antwort und TTS-Ausgabe nach jeder Transkription.")
+
+                        def build_tts_enabled():
+                            t = ui.switch("TTS (Qwen) aktivieren", value=cfg.get("TTS_ENABLED", False)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                            refs["tts_enabled"] = {"toggle": t}
+                        config_item("Text-to-Speech", build_tts_enabled, "Aktiviert die lokale Sprachausgabe via Qwen TTS auf der GPU.")
+
+                        def build_or_key():
+                            inp = ui.input(value=cfg.get("OPENROUTER_API_KEY", ""), password=True, password_toggle_button=True, placeholder="sk-or-v1-...").classes("w-full").props("dark outlined")
+                            refs["or_key"] = {"input": inp}
+                        config_item("OpenRouter API-Key", build_or_key, "Dein OpenRouter API-Schlüssel. Registrierung unter openrouter.ai.")
+
+                        def build_or_model():
+                            inp = ui.input(value=cfg.get("OPENROUTER_MODEL", "openai/gpt-4o-mini"), placeholder="openai/gpt-4o-mini").classes("w-full").props("dark outlined")
+                            refs["or_model"] = {"input": inp}
+                        config_item("LLM Modell (OpenRouter)", build_or_model, "Vollständige Modell-ID von OpenRouter, z.B. 'openai/gpt-4o-mini' oder 'anthropic/claude-3-haiku'.")
+
+                        def build_tts_model():
+                            inp = ui.input(value=cfg.get("TTS_MODEL", "Qwen/Qwen2-Audio-7B-Instruct"), placeholder="Qwen/Qwen2-Audio-7B-Instruct").classes("w-full").props("dark outlined")
+                            refs["tts_model"] = {"input": inp}
+                        config_item("TTS Modell", build_tts_model, "Hugging Face Model-ID oder lokaler Pfad des Qwen TTS Modells.")
+
+                        def build_tts_voice():
+                            inp = ui.input(value=cfg.get("TTS_VOICE", "default"), placeholder="default").classes("w-full").props("dark outlined")
+                            refs["tts_voice"] = {"input": inp}
+                        config_item("TTS Stimme", build_tts_voice, "Stimmen-Preset des TTS Modells (modellabhängig, z.B. 'default', 'af_heart').")
+
+                        def build_tts_volume():
+                            sl = ui.slider(min=0.0, max=1.0, step=0.05, value=cfg.get("TTS_VOLUME", 0.9)).props("color=emerald-500 dark snap label")
+                            refs["tts_volume"] = {"slider": sl}
+                        config_item("TTS Lautstärke", build_tts_volume, "Ausgabelautstärke der TTS-Synthese (0.0 = stumm, 1.0 = maximal).")
+
+                        def build_barge_in():
+                            t = ui.switch("Barge-In aktivieren", value=cfg.get("TTS_BARGE_IN_ENABLED", True)).classes("text-sm text-zinc-300").props("color=emerald-500 dark")
+                            refs["barge_in"] = {"toggle": t}
+                        config_item("Barge-In / Interrupt", build_barge_in, "Unterbricht die laufende TTS-Ausgabe sofort wenn neue Spracheingabe erkannt wird.")
+
+                    # LLM System-Prompt (eigene volle Breite)
+                    with ui.column().classes("w-full gap-1 p-3 bg-zinc-900/70 border border-zinc-800/60 rounded-md"):
+                        ui.label("LLM System-Prompt").classes("text-zinc-500 text-[10px] font-bold uppercase tracking-wider")
+                        ui.label("Instruktionen für das Dialogmodell. Steuert Persönlichkeit, Sprache und Verhalten.").classes("text-zinc-600 text-[10px] leading-snug mb-1")
+                        llm_prompt_area = ui.textarea(
+                            value=cfg.get("LLM_SYSTEM_PROMPT", "Du bist ein hilfreicher Assistent. Antworte auf Deutsch."),
+                            placeholder="Du bist ein hilfreicher Assistent..."
+                        ).classes("w-full").props("dark outlined rows=4")
+                        refs["llm_prompt"] = {"area": llm_prompt_area}
+
+                    # Speichern-Button für Pipeline-Config
+                    async def save_vp_config():
+                        vp_updates = {
+                            "VOICE_PIPELINE_ENABLED": refs["vp_enabled"]["toggle"].value,
+                            "OPENROUTER_API_KEY": refs["or_key"]["input"].value,
+                            "OPENROUTER_MODEL": refs["or_model"]["input"].value,
+                            "LLM_SYSTEM_PROMPT": refs["llm_prompt"]["area"].value,
+                            "TTS_ENABLED": refs["tts_enabled"]["toggle"].value,
+                            "TTS_MODEL": refs["tts_model"]["input"].value,
+                            "TTS_VOICE": refs["tts_voice"]["input"].value,
+                            "TTS_VOLUME": round(refs["tts_volume"]["slider"].value, 2),
+                            "TTS_BARGE_IN_ENABLED": refs["barge_in"]["toggle"].value,
+                        }
+                        try:
+                            config_rw.write_config(vp_updates)
+                            ui.notify("Pipeline-Konfiguration gespeichert.", type="positive", color="emerald-600")
+                        except Exception as e:
+                            ui.notify(f"Fehler: {e}", type="negative", color="red-600")
+
+                    with ui.row().classes("w-full justify-end"):
+                        ui.button("Konfiguration speichern", icon="save", on_click=save_vp_config).classes("btn-em shadow-none").props("flat")
+
+
     # State → (dot-Farbe, label-Basis-Text, label-Farbe, button-Text, button-Icon,
     #           button-disabled, recording-pulse, animierte-Punkte am Label)
     _STATE_VIEW = {
@@ -565,6 +721,40 @@ async def index():
     process_manager.on_state_change(lambda _new: update_status())
 
     update_status()
+
+    # --- Voice-Pipeline Status-Updater ---
+    _VP_STATE_VIEW = {
+        "offline":   ("bg-zinc-600",    "Offline",   "text-zinc-500",    "Pipeline starten",   "play_arrow", False),
+        "starting":  ("bg-amber-500",   "Starte",    "text-amber-500",   "Wird gestartet",     "hourglass_empty", True),
+        "ready":     ("bg-emerald-500", "Bereit",    "text-emerald-500", "Pipeline stoppen",   "stop",       False),
+        "listening": ("bg-emerald-500", "Hört zu",   "text-emerald-500", "Pipeline stoppen",   "stop",       False),
+        "thinking":  ("bg-sky-500",     "Denkt",     "text-sky-500",     "Pipeline stoppen",   "stop",       False),
+        "speaking":  ("bg-violet-500",  "Spricht",   "text-violet-500",  "Pipeline stoppen",   "stop",       False),
+        "stopping":  ("bg-amber-500",   "Stoppe",    "text-amber-500",   "Wird gestoppt",      "hourglass_empty", True),
+    }
+
+    def update_vp_status(*_args):
+        state = voice_pipeline.get_state()
+        if not voice_pipeline.is_pipeline_running() and state not in ("offline", "stopping"):
+            state = "offline"
+        view = _VP_STATE_VIEW.get(state, _VP_STATE_VIEW["offline"])
+        dot_color, lbl_text, lbl_color, btn_text, btn_icon, btn_disabled = view
+
+        vp_state_dot.classes(remove=_ALL_DOT_COLORS, add=dot_color)
+        vp_state_label.set_text(lbl_text)
+        vp_state_label.classes(remove=_ALL_LABEL_COLORS, add=lbl_color)
+
+        btn = refs["vp_toggle_btn"]
+        btn.set_text(btn_text)
+        btn.props(remove="icon=play_arrow icon=stop icon=hourglass_empty", add=f"icon={btn_icon}")
+        if state in ("ready", "listening", "thinking", "speaking"):
+            btn.classes(remove="btn-cta", add="btn-cta btn-cta-stop")
+        else:
+            btn.classes(remove="btn-cta-stop", add="btn-cta")
+        btn.set_enabled(not btn_disabled)
+
+    voice_pipeline.on_state_change(lambda _new: update_vp_status())
+    update_vp_status()
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(title="Whisper AI", port=8080, dark=True, reload=False, show=False)
