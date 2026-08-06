@@ -193,6 +193,19 @@ async def _read_stdout() -> None:
                     cb(line)
                 except Exception:
                     pass
+
+            # Transkript an Voice-Pipeline weiterleiten (falls aktiv)
+            if is_transcript:
+                transcript_text = line[len("__TRANSCRIPT__:"):].strip()
+                if transcript_text:
+                    try:
+                        import voice_pipeline
+                        if voice_pipeline.is_pipeline_running():
+                            asyncio.create_task(
+                                voice_pipeline.handle_stt_transcript(transcript_text)
+                            )
+                    except Exception:
+                        pass
     except Exception:
         pass
 
